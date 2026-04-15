@@ -1,0 +1,40 @@
+# Environment
+.env
+.env.local
+
+# Database
+db/*.db
+db/*.db-shm
+db/*.db-wal
+
+# User profile (never commit personal data)
+profiles/me/
+profiles/active/
+!profiles/template/
+
+# Google OAuth
+config/credentials.json
+config/gdocs-token.json
+
+# LinkedIn Playwright session
+.linkedin-session/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# PDFs and user-uploaded files (read-only originals, not for version control)
+user_files/

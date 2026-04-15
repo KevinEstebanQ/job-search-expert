@@ -1,4 +1,6 @@
-const BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+// In dev: VITE_API_BASE=http://localhost:8000 (set in .env.development)
+// In Docker: VITE_API_BASE is unset → BASE is '' → nginx proxies /api/* to backend
+const BASE = import.meta.env.VITE_API_BASE ?? ''
 
 async function req(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {

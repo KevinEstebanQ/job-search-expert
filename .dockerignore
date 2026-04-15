@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Database (mounted as volume at runtime)
+db/*.db
+db/*.db-shm
+db/*.db-wal
+
+# Personal profile data — never baked into the image
+profiles/kevin/
+profiles/me/
+profiles/active/
+
+# Secrets
+.env
+.env.local
+config/credentials.json
+config/gdocs-token.json
+
+# LinkedIn session (mounted as volume)
+linkedin-session/
+.linkedin-session/
+
+# Frontend (built by the frontend container, not the backend)
+frontend/
+
+# Git and editor
+.git/
+.gitignore
+*.md

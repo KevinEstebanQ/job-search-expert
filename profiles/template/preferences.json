@@ -1,0 +1,68 @@
+{
+  "_comment": "Copy this file to your profile directory and fill in your details. Remove all _comment fields.",
+  "target_titles": [
+    "Backend Engineer",
+    "Software Engineer",
+    "Junior Backend Developer",
+    "Software Developer"
+  ],
+  "target_locations": [
+    "Your City, ST",
+    "Remote"
+  ],
+  "remote_ok": true,
+  "hybrid_ok": true,
+  "onsite_ok": false,
+  "min_salary": null,
+  "max_experience_years": 3,
+  "blocked_companies": [],
+  "required_keywords": [],
+  "negative_keywords": [
+    "10+ years",
+    "iOS",
+    "Android",
+    "data scientist",
+    "machine learning engineer",
+    "embedded systems"
+  ],
+  "skill_sets": {
+    "_comment": "must_have: penalize heavily if missing. strong: significant boost. nice: small boost.",
+    "must_have": [
+      "python",
+      "backend",
+      "api",
+      "rest"
+    ],
+    "strong": [
+      "fastapi",
+      "django",
+      "flask",
+      "postgresql",
+      "docker",
+      "node"
+    ],
+    "nice": [
+      "kubernetes",
+      "mongodb",
+      "microservices",
+      "redis",
+      "celery",
+      "aws",
+      "azure",
+      "gcp"
+    ]
+  },
+  "greenhouse_companies": [
+    "_comment_remove": "Remove this field. Add Greenhouse board slugs for companies you want to track.",
+    "stripe",
+    "linear",
+    "vercel",
+    "notion",
+    "figma",
+    "shopify",
+    "cloudflare",
+    "hashicorp",
+    "datadog",
+    "mongodb"
+  ]
+}

@@ -9,6 +9,7 @@ load_dotenv()
 from backend.db.schema import init_db
 from backend.api.jobs import router as jobs_router
 from backend.api.scrape import router as scrape_router
+from backend.api.stats import router as stats_router
 
 
 @asynccontextmanager
@@ -34,6 +35,7 @@ app.add_middleware(
 
 app.include_router(jobs_router)
 app.include_router(scrape_router)
+app.include_router(stats_router)
 
 
 @app.get("/health")

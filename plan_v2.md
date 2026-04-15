@@ -11,7 +11,7 @@
 |---|---|
 | Kevin-specific hardcoded profile | Generic profile system — any developer clones + fills template |
 | Google Docs dashboard | Full-stack web app (FastAPI + React) |
-| Python playwright library for scraping | Python playwright for runtime + MCP Playwright/DevTools for API recon |
+| Python playwright library for scraping | python-jobspy for mainstream boards; direct APIs for niche boards |
 | Local scripts only | Docker Compose — one-command boot |
 | No frontend | React dashboard with job board, pipeline, cover letter drafting |
 
@@ -52,10 +52,8 @@ job-search-expert/
 │   │   ├── base.py                  # BaseScraper ABC + upsert logic
 │   │   ├── greenhouse.py            # JSON API — no auth
 │   │   ├── remoteok.py              # JSON API — no auth
-│   │   ├── dice.py                  # RSS + detail API
-│   │   ├── indeed.py                # Internal API discovered via DevTools MCP
-│   │   ├── wellfound.py             # GraphQL API discovered via DevTools MCP
-│   │   └── linkedin.py              # Playwright — persistent session
+│   │   ├── dice.py                  # Internal JSON API — no auth
+│   │   └── jobspy_adapter.py        # python-jobspy: Indeed, LinkedIn, ZipRecruiter, Glassdoor
 │   ├── scoring/
 │   │   └── score.py                 # Deterministic 0.0–1.0 scorer
 │   └── profile/
@@ -113,27 +111,19 @@ job-search-expert/
 
 ## MCP Tools — Roles in This Project
 
-### Chrome DevTools MCP — API Recon Layer
-Used during **development** to discover job board internal APIs, not during runtime.
+MCP tools are **development aids only** — no MCP tool calls belong in `backend/`.
 
-**Workflow:**
-1. `navigate_page` to job board (e.g., wellfound.com/jobs)
-2. `list_network_requests` while browsing → find XHR/fetch calls returning job JSON
-3. Examine headers, payloads, auth tokens → replicate in Python scraper
-4. Result: `scrapers/wellfound.py` calls the real internal API instead of parsing HTML
+### Chrome DevTools MCP — Debugging Tool
+Use when a scraper breaks or returns unexpected data:
+1. `navigate_page` to the board
+2. `list_network_requests` → find the XHR/fetch call returning job JSON
+3. Compare current response shape to what the scraper expects
+4. Fix the scraper accordingly
 
-**Also used for:**
-- Debugging scrapers when they break (inspect what the page is actually returning)
-- Discovering if a site has changed their API contract
-- Inspecting auth flows before implementing persistent sessions
+Also useful for: inspecting whether a board added auth requirements, discovering an endpoint for a new niche board not covered by JobSpy (e.g. Wellfound).
 
-### Playwright MCP — Browser Automation Assist
-Used for:
-- Initial LinkedIn authentication flow (one-time, human-assisted)
-- Fallback extraction for any board that resists API discovery
-- Verifying that scrapers return real data during development
-
-**Runtime scrapers** (`backend/scrapers/linkedin.py`) still use the Python `playwright` library — MCP is the dev/debug companion, not the production runner.
+### Playwright MCP — Dev Exploration
+Use for: verifying that a discovered API returns real data before writing a scraper. Not used at runtime.
 
 ---
 
@@ -304,15 +294,16 @@ Thresholds: ≥0.65 → review queue; ≥0.8 → high priority; <0.4 → hidden 
 
 ## Job Board Strategy
 
-| Board | Method | Auth | MCP Role |
+| Board | Method | Auth | Notes |
 |---|---|---|---|
-| Greenhouse | Official JSON API | None | N/A — API is public and documented |
-| Remote OK | Official JSON API | None | N/A |
-| Dice | RSS + detail API | None | N/A |
-| Indeed | Internal API (XHR) | None | DevTools MCP used to discover endpoint + params |
-| Wellfound | GraphQL API | None | DevTools MCP used to discover schema + variables |
-| LinkedIn | Playwright + persistent session | One-time login | Playwright MCP assists auth flow setup |
-| Glassdoor | Skipped (MVP) | — | Can revisit — DevTools MCP could help discover API |
+| Greenhouse | Official JSON API | None | Public, stable, documented |
+| Remote OK | Official JSON API | None | Public, stable |
+| Dice | Internal JSON API | None | Discovered key embedded in Dice frontend JS — may rotate |
+| Indeed | python-jobspy | None | JobSpy handles API versioning; board coverage is maintained upstream |
+| LinkedIn | python-jobspy | None | JobSpy uses session cookies internally; no Playwright binary needed |
+| ZipRecruiter | python-jobspy | None | Bonus — covered at no extra cost |
+| Glassdoor | python-jobspy | None | Bonus — covered at no extra cost |
+| Wellfound | Optional (Phase 2+) | None | Not in JobSpy; GraphQL API discoverable via DevTools MCP if needed |
 
 ---
 
@@ -338,7 +329,7 @@ PUT  /api/applications/{id}/cover-letter    # save edited cover letter
 
 **Scraping**
 ```
-POST /api/scrape/{source}       # trigger single scraper: greenhouse|remoteok|dice|indeed|wellfound|linkedin|all
+POST /api/scrape/{source}       # trigger single scraper: greenhouse|remoteok|dice|jobspy|all
 GET  /api/scrape/log            # recent scrape_log entries
 ```
 
@@ -392,7 +383,7 @@ All agents read `profiles/active/` at runtime. No hardcoded personal data anywhe
 
 ### `agents/job-scout.md`
 **Role**: Run scrapers in sequence → score unscored jobs → print summary with top picks.
-**Sequence**: greenhouse → remoteok → dice → indeed → wellfound → linkedin
+**Sequence**: greenhouse → remoteok → dice → jobspy (covers Indeed, LinkedIn, ZipRecruiter, Glassdoor)
 **Output**: "X new jobs. Y scored ≥0.7. Top 5: [list with scores]"
 **Model**: `claude-sonnet-4-6`
 
@@ -439,8 +430,11 @@ services:
 **`.env.example`**
 ```
 ANTHROPIC_API_KEY=sk-ant-...
-LINKEDIN_SESSION_PATH=~/.config/job-search/linkedin-session
 GREENHOUSE_COMPANIES=stripe,airbnb,vercel,linear     # comma-separated board slugs
+JOBSPY_SEARCH_TERM=backend engineer python
+JOBSPY_LOCATION=United States
+JOBSPY_HOURS_OLD=72
+JOBSPY_RESULTS_WANTED=50
 LOG_LEVEL=INFO
 ```
 
@@ -468,31 +462,29 @@ User-facing skill. Routes intents to agents or direct API calls.
 | Phase | What | Done when |
 |---|---|---|
 | 1 | Profile template, `profiles/active` symlink, `backend/profile/loader.py`, `backend/db/schema.py`, `backend/scoring/score.py` | DB inits, scoring runs against a mock job |
-| 2 | `scrape_greenhouse.py`, `scrape_remoteok.py`, `scrape_dice.py`, FastAPI shell with `/api/jobs` and `/api/scrape` | `GET /api/jobs` returns real scored jobs |
+| 2 | `greenhouse.py`, `remoteok.py`, `dice.py`, `jobspy_adapter.py`, FastAPI shell with `/api/jobs` and `/api/scrape` | `GET /api/jobs` returns real scored jobs from all boards |
 | 3 | Minimal React frontend: Dashboard + Jobs page, no pipeline yet | Developer can browse and filter real job listings in browser |
-| 4 | `scrape_indeed.py` (DevTools recon first), `scrape_wellfound.py` (GraphQL recon), `/api/agent/scout`, `agents/job-scout.md` | Full discovery pipeline running |
+| 4 | `/api/agent/scout`, `agents/job-scout.md` | Full discovery pipeline running end-to-end |
 | 5 | Pipeline page, applications CRUD API, `/api/jobs/{id}/interested` | Can track applications through Kanban |
 | 6 | `agents/application-drafter.md`, Cover Letter page, `/api/agent/draft/{id}` | Full application prep workflow |
-| 7 | `scrape_linkedin.py` + Playwright session, `agents/status-tracker.md`, status page | Complete system |
+| 7 | `agents/status-tracker.md`, status page | Complete system |
 | 8 | Docker Compose, `SETUP.md`, profile template polish, `.gitignore` audit | Ready to open-source |
 
 ---
 
-## API Discovery Workflow (MCP-Assisted)
+## Adding a New Board
 
-For boards without public APIs (Indeed, Wellfound):
+For boards not covered by JobSpy (e.g. Wellfound, AngelList):
 
 1. Open Chrome DevTools MCP → `navigate_page` to job board
-2. Perform a job search manually (or via Playwright MCP)
+2. Perform a job search manually
 3. `list_network_requests` → filter for XHR/fetch with job JSON in response
 4. Examine: endpoint URL, query params, required headers, response schema
-5. Replicate in Python using `httpx` — add to `backend/scrapers/`
-6. Document the discovered endpoint in `skills/job-search/references/job-boards.md`
+5. Implement a new `BaseScraper` subclass using `httpx`
+6. Add a route in `backend/api/scrape.py`
+7. Document the endpoint in `skills/job-search/references/job-boards.md`
 
-This process replaces brittle HTML parsing with direct API calls that are:
-- Faster (no page render wait)
-- More stable (API schemas change less than DOM structure)
-- Cleaner to maintain
+For boards already covered by JobSpy (Indeed, LinkedIn, ZipRecruiter, Glassdoor): do not write a custom scraper. Update python-jobspy instead if it breaks.
 
 ---
 
@@ -506,20 +498,8 @@ This process replaces brittle HTML parsing with direct API calls that are:
 | 4 | "find new jobs" skill invocation streams scout output, DB grows |
 | 5 | Drag card in Pipeline → status change reflected in `GET /api/applications` |
 | 6 | "draft cover letter for job 1" → Cover Letter page populates |
-| 7 | LinkedIn scraper runs headless after one auth setup |
+| 7 | `GET /api/agent/status` returns pipeline summary |
 | 8 | `git clone` + `cp -r profiles/template profiles/me` + `docker-compose up` — full system up on fresh machine |
-
----
-
-## Open-Source Considerations
-
-- **No personal data committed**: `profiles/active/` is gitignored; template contains only placeholder text
-- **No hardcoded names or API keys**: all config via `.env` and profile files
-- **Greenhouse company list**: shipped as a starter list of tech companies, easily extended
-- **LinkedIn**: documented as optional — system works without it; Playwright session stored outside repo
-- **Contributing guide** (`CONTRIBUTING.md`): how to add a new scraper (implement `BaseScraper`, add route, add board entry)
-- **License**: MIT
-- **`SETUP.md`**: step-by-step for any developer on Mac/Linux/WSL including profile setup, Docker, first scrape run
 
 ---
 
@@ -527,8 +507,18 @@ This process replaces brittle HTML parsing with direct API calls that are:
 
 | Risk | Mitigation |
 |---|---|
-| Indeed/Wellfound change internal API | DevTools MCP makes re-discovery fast; document endpoint version in job-boards.md |
-| LinkedIn rate limiting | Max 3–4 queries/day enforced in scraper; system functions without it |
+| JobSpy breaks (Indeed/LinkedIn change API) | `pip install -U python-jobspy` — community absorbs the fix; fallback: run without jobspy boards |
+| Dice API key rotates | Discover new key via DevTools MCP (embedded in Dice frontend JS); update `dice.py:17` |
 | Profile symlink breaks on Windows | Provide `ACTIVE_PROFILE_PATH` env var as fallback for Windows devs |
 | SQLite contention under concurrent scrapes | Scrapers run sequentially; WAL mode enabled at init |
 | Frontend build complexity for new contributors | Vite + React is standard; Dockerfile handles build; no custom toolchain |
+| ToS violation if operated as SaaS | This is a self-hosted personal tool — each user scrapes on their own behalf. Do not build a centralized hosted service that scrapes LinkedIn/Indeed on behalf of users. |
+
+## Open-Source and License Considerations
+
+- **This project**: MIT licensed — permissive, allows commercial use
+- **python-jobspy**: MIT licensed — compatible, attribution required in distributions. `pip install python-jobspy` pulls `pandas` as a transitive dependency (~30MB)
+- **Job board ToS**: LinkedIn and Indeed prohibit automated scraping. The self-hosted model (user runs their own instance, scrapes their own searches) is the most defensible structure. A centralized SaaS where you operate the scrapers exposes you to enforcement risk. If you ever monetize as a hosted service, replace LinkedIn/Indeed with their official partner APIs or remove them from the hosted offering
+- **Greenhouse / RemoteOK**: Public APIs with no ToS restrictions on programmatic access — safe for any use
+- **No personal data committed**: `profiles/active/` is gitignored; template contains only placeholder text
+- **No hardcoded names or API keys**: all config via `.env` and profile files

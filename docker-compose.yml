@@ -8,16 +8,12 @@ services:
       - ./db:/app/db
       # Active profile mounted read-only — user sets up profiles/active on host
       - ./profiles/active:/app/profile:ro
-      # LinkedIn Playwright session — set LINKEDIN_SESSION_PATH in .env
-      # Auth runs once on the host; container reuses the saved session headlessly
-      - ${LINKEDIN_SESSION_PATH:-./linkedin-session}:/app/linkedin-session
     env_file:
       - path: .env
         required: false   # scrapers/API work without it; only agent endpoints need ANTHROPIC_API_KEY
     environment:
       - DB_PATH=/app/db/jobs.db
       - ACTIVE_PROFILE_PATH=/app/profile
-      - LINKEDIN_SESSION_PATH=/app/linkedin-session
     # Backend is NOT exposed to the host — nginx proxies /api/* internally
     expose:
       - "8000"

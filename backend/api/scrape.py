@@ -6,7 +6,7 @@ from backend.scoring.score import score_job_row
 
 router = APIRouter(prefix="/api/scrape", tags=["scrape"])
 
-VALID_SOURCES = {"greenhouse", "remoteok", "dice", "indeed", "wellfound", "linkedin", "all"}
+VALID_SOURCES = {"greenhouse", "remoteok", "dice", "jobspy", "all"}
 
 
 def _score_unscored(conn) -> int:
@@ -40,6 +40,9 @@ def _run_scraper(source: str) -> dict:
     if source == "dice":
         from backend.scrapers.dice import DiceScraper
         return DiceScraper().run()
+    if source == "jobspy":
+        from backend.scrapers.jobspy_adapter import JobSpyScraper
+        return JobSpyScraper().run()
     raise NotImplementedError(f"Scraper not yet implemented: {source}")
 
 
@@ -48,7 +51,7 @@ def trigger_scrape(source: str, background_tasks: BackgroundTasks):
     if source not in VALID_SOURCES:
         raise HTTPException(status_code=400, detail=f"Unknown source: {source}. Valid: {VALID_SOURCES}")
 
-    sources = ["greenhouse", "remoteok", "dice"] if source == "all" else [source]
+    sources = ["greenhouse", "remoteok", "dice", "jobspy"] if source == "all" else [source]
     results = []
 
     for src in sources:

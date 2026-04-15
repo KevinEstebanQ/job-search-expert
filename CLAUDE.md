@@ -41,9 +41,14 @@ These assume the repo root as working directory.
 
 **Backend (FastAPI)**
 ```bash
-cd backend
-pip install -r ../requirements.txt
-uvicorn main:app --reload --port 8000
+# First time — create venv and install deps
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+# playwright needs system build tools; install separately if needed:
+# sudo apt-get install python3-dev && .venv/bin/pip install playwright && .venv/bin/playwright install chromium
+
+# Run
+.venv/bin/uvicorn backend.main:app --reload --port 8000
 # API docs: http://localhost:8000/docs
 ```
 

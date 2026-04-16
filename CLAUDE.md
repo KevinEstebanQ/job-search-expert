@@ -20,7 +20,7 @@ The full implementation plan lives in `plan_v2.md`. Build phases are defined the
 
 2. **Frontend** (`frontend/`) — React + Vite SPA on port 3000. Four pages: Dashboard, Jobs, Pipeline (Kanban), Cover Letter editor. Talks only to the backend REST API.
 
-3. **Claude layer** (`agents/`, `skills/`) — Agent markdown files define Claude's behavior for each workflow (scout, reviewer, drafter, status-tracker). The `skills/job-search/SKILL.md` skill is the single user-facing Claude Code entry point and routes intents to agents or backend calls. `agents/code-review.md` is a meta-agent: invoke it when the team needs a cold, unbiased review of architecture or code — it reads files first, then critiques.
+3. **AI layer** (`agents/`) — Optional. `GET /api/ai/status` returns `{"available": false}` when `ANTHROPIC_API_KEY` is absent; the frontend uses this to hide AI features entirely. Only `agents/ai-drafter.md` is a runtime dependency (Phase 9+). `agents/code-review.md` is a dev meta-agent: invoke it for a cold, unbiased architectural review — reads files first, critiques second.
 
 **Profile system** — all personal data lives in `profiles/active/` (a symlink). `profiles/template/` is the committed starting point. Agents and scoring read from `profiles/active/` at runtime. Nothing in `agents/`, `skills/`, or `backend/` contains personal data.
 
@@ -98,9 +98,13 @@ ln -sfn ./me profiles/active
 
 **MCP tools are debug aids only.** Chrome DevTools MCP is for when a scraper breaks (compare current XHR shape vs. what the scraper expects) or for discovering endpoints on new boards. Playwright MCP is for dev exploration. No MCP tool calls belong in `backend/`.
 
+**AI is optional progressive enhancement.** The full app — scraping, scoring, job listing, pipeline tracking — works without `ANTHROPIC_API_KEY`. AI endpoints (`/api/ai/*`) return HTTP 503 when the key is absent. The frontend checks `GET /api/ai/status` on load and conditionally renders the "Draft Cover Letter" button. No broken states, no error messages, no degraded UX without a key.
+
+**TTL cleanup + score floor run after every scrape.** After `upsert_jobs` completes, two cleanup passes run: (1) delete jobs older than `JOB_TTL_DAYS` (default 30) that are not in `applications`; (2) delete jobs scored below `SCORE_FLOOR` (default 0.3) that are not in `applications`. This keeps the DB bounded and the job list signal-dense.
+
 **Scoring is deterministic and profile-driven.** `backend/scoring/score.py` reads `skill_sets` from the active profile's `preferences.json`. No LLM calls in scoring — it must be fast, reproducible, and runnable offline.
 
-**Agents stream output.** `POST /api/agent/{action}` returns a streaming response. The frontend's `AgentOutput` component consumes this. Keep agent endpoint handlers thin — they load the agent markdown, call the Claude SDK with streaming enabled, and forward chunks.
+**AI endpoints stream output (Phase 9+).** `POST /api/ai/draft/{job_id}` returns a streaming response consumed by the Cover Letter page. Keep AI endpoint handlers thin — load the agent markdown, call the Claude SDK with streaming, forward chunks. Return HTTP 503 immediately if `ANTHROPIC_API_KEY` is not set.
 
 **SQLite with WAL mode.** Scrapers run sequentially (not concurrently) to avoid write contention. WAL mode is enabled at init. Do not introduce concurrent scrape threads without revisiting this.
 
@@ -127,6 +131,8 @@ All required vars are in `.env.example`. Critical ones:
 - `GREENHOUSE_COMPANIES` — comma-separated board slugs to scrape
 - `JOBSPY_SEARCH_TERM` / `JOBSPY_LOCATION` / `JOBSPY_HOURS_OLD` / `JOBSPY_RESULTS_WANTED` — controls the JobSpy adapter query
 - `ACTIVE_PROFILE_PATH` — fallback for Windows (where symlinks may not work); overrides `profiles/active/`
+- `JOB_TTL_DAYS` — days before untracked jobs are deleted after scrape (default: 30)
+- `SCORE_FLOOR` — jobs scored below this are dropped after scrape (default: 0.3)
 
 ---
 

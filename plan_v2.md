@@ -14,6 +14,7 @@
 | Python playwright library for scraping | python-jobspy for mainstream boards; direct APIs for niche boards |
 | Local scripts only | Docker Compose — one-command boot |
 | No frontend | React dashboard with job board, pipeline, cover letter drafting |
+| AI as core dependency | AI is optional — full app works without `ANTHROPIC_API_KEY` |
 
 ---
 
@@ -73,16 +74,13 @@ job-search-expert/
 │       ├── components/
 │       │   ├── JobCard.jsx
 │       │   ├── ScoreBadge.jsx
-│       │   ├── PipelineColumn.jsx
-│       │   └── AgentOutput.jsx      # Streaming Claude agent responses
+│       │   └── PipelineColumn.jsx
 │       └── api/
 │           └── client.js            # Axios wrapper for backend REST API
 │
-├── agents/                          # Claude agent definitions (invoked via backend API)
-│   ├── job-scout.md                 # Run all scrapers → score → report new jobs
-│   ├── job-reviewer.md              # Surface top unreviewed for interested/skip
-│   ├── application-drafter.md       # Tailored cover letter + resume bullets
-│   └── status-tracker.md           # Pipeline summary + stale flags
+├── agents/                          # Claude agent definitions (Phase 9+, all optional)
+│   ├── ai-drafter.md                # Cover letter + resume bullets (needs ANTHROPIC_API_KEY)
+│   └── code-review.md               # Meta-agent: cold architectural review
 │
 ├── skills/                          # Claude Code skills
 │   └── job-search/
@@ -333,12 +331,11 @@ POST /api/scrape/{source}       # trigger single scraper: greenhouse|remoteok|di
 GET  /api/scrape/log            # recent scrape_log entries
 ```
 
-**Agents**
+**AI (Phase 9+ — all endpoints 503 if ANTHROPIC_API_KEY not set)**
 ```
-POST /api/agent/scout           # run job-scout agent, stream output
-POST /api/agent/reviewer        # run job-reviewer agent
-POST /api/agent/draft/{job_id}  # run application-drafter for a job
-POST /api/agent/status          # run status-tracker
+GET  /api/ai/status             # {"available": true|false} — key presence check
+POST /api/ai/draft/{job_id}     # cover letter from job + profile → saved to applications row
+POST /api/ai/bullets/{job_id}   # 3-5 tailored resume bullets for this role
 ```
 
 **Preferences**
@@ -355,7 +352,7 @@ PUT  /api/preferences
 - Cards: total jobs today, new since last visit, jobs in pipeline, follow-ups due
 - Sparkline: jobs found per day (7-day)
 - Top picks: 5 highest-scored unreviewed jobs with quick "interested / skip" buttons
-- Agent run button: "Find New Jobs" → triggers scout, streams progress
+- "Run Scrape" button → `POST /api/scrape/all` → refreshes job list on completion
 
 ### Jobs (`/jobs`)
 - Filterable table: source, score range, remote type, date range, keyword search
@@ -377,27 +374,22 @@ PUT  /api/preferences
 
 ---
 
-## Agents
+## AI Layer (Phase 9+)
 
-All agents read `profiles/active/` at runtime. No hardcoded personal data anywhere in agent files.
+All AI endpoints require `ANTHROPIC_API_KEY`. `GET /api/ai/status` returns `{"available": false}` when
+the key is absent — the frontend uses this to conditionally show AI features. No broken states,
+no error messages, no degraded UX. The core app is fully functional without it.
 
-### `agents/job-scout.md`
-**Role**: Run scrapers in sequence → score unscored jobs → print summary with top picks.
-**Sequence**: greenhouse → remoteok → dice → jobspy (covers Indeed, LinkedIn, ZipRecruiter, Glassdoor)
-**Output**: "X new jobs. Y scored ≥0.7. Top 5: [list with scores]"
+### `agents/ai-drafter.md`
+**Role**: Given job_id, fetch job description from DB, read `profiles/active/resume.md` and
+`cover-letter-style.md`, produce a tailored cover letter + 3-5 resume bullets + red flags.
+Save cover letter to the applications row. Stream output.
+**Endpoint**: `POST /api/ai/draft/{job_id}`
 **Model**: `claude-sonnet-4-6`
 
-### `agents/job-reviewer.md`
-**Role**: Fetch top 10 unreviewed jobs (score≥0.65, no applications row). Present each interactively.
-**Model**: `claude-sonnet-4-6`
-
-### `agents/application-drafter.md`
-**Role**: Given job_id, fetch description, read profile resume + style guide, produce tailored cover letter + 3-5 resume bullets + red flags. Save to applications row.
-**Model**: `claude-sonnet-4-6`
-
-### `agents/status-tracker.md`
-**Role**: Pipeline table by status. Flag: >7 days without update, passed follow_up_date.
-**Model**: `claude-haiku-4-5` — read + summarize only.
+### `agents/code-review.md`
+Meta-agent — not a runtime dependency. Invoke manually when the team needs an unbiased
+architectural review. Reads files first, critiques second.
 
 ---
 
@@ -457,18 +449,27 @@ User-facing skill. Routes intents to agents or direct API calls.
 
 ---
 
-## Build Order (MVP-First)
+## Build Order
+
+### Core (no API key required)
 
 | Phase | What | Done when |
 |---|---|---|
-| 1 | Profile template, `profiles/active` symlink, `backend/profile/loader.py`, `backend/db/schema.py`, `backend/scoring/score.py` | DB inits, scoring runs against a mock job |
-| 2 | `greenhouse.py`, `remoteok.py`, `dice.py`, `jobspy_adapter.py`, FastAPI shell with `/api/jobs` and `/api/scrape` | `GET /api/jobs` returns real scored jobs from all boards |
-| 3 | Minimal React frontend: Dashboard + Jobs page, no pipeline yet | Developer can browse and filter real job listings in browser |
-| 4 | `/api/agent/scout`, `agents/job-scout.md` | Full discovery pipeline running end-to-end |
-| 5 | Pipeline page, applications CRUD API, `/api/jobs/{id}/interested` | Can track applications through Kanban |
-| 6 | `agents/application-drafter.md`, Cover Letter page, `/api/agent/draft/{id}` | Full application prep workflow |
-| 7 | `agents/status-tracker.md`, status page | Complete system |
-| 8 | Docker Compose, `SETUP.md`, profile template polish, `.gitignore` audit | Ready to open-source |
+| 1 | Profile template, `profiles/active` symlink, `backend/profile/loader.py`, `backend/db/schema.py`, `backend/scoring/score.py` | ✓ Done |
+| 2 | All 4 scrapers + FastAPI `/api/jobs` + `/api/scrape` | ✓ Done |
+| 3 | Dashboard + Jobs page | ✓ Done |
+| 4 | Verify scrape pipeline end-to-end — JobSpy runs, data flows into DB, scores are written | `POST /api/scrape/all` returns real jobs; `GET /api/jobs` returns scored rows |
+| 5 | `applications.py` CRUD — `GET /api/applications` (grouped by status), `PUT /api/applications/{id}` (status, notes, follow_up_date) | Pipeline data readable and writable via API |
+| 6 | Pipeline page — Kanban with drag-to-status | Status changes persist; pipeline matches DB |
+| 7 | TTL cleanup + score floor — auto-runs after every scrape | DB stays bounded; low-signal jobs dropped automatically |
+| 8 | `SETUP.md` + Docker prod config + `.gitignore` audit | **Core complete: `git clone` → `docker-compose up` → full working app** |
+
+### AI Enhancement (requires `ANTHROPIC_API_KEY`)
+
+| Phase | What | Done when |
+|---|---|---|
+| 9 | `GET /api/ai/status`, `POST /api/ai/draft/{job_id}`, `POST /api/ai/bullets/{job_id}`, `agents/ai-drafter.md` | Returns 503 without key; streams cover letter with key |
+| 10 | Cover Letter page + resume bullets UI — renders only when `GET /api/ai/status` returns available | Full AI experience with key; silently absent without |
 
 ---
 
@@ -493,13 +494,15 @@ For boards already covered by JobSpy (Indeed, LinkedIn, ZipRecruiter, Glassdoor)
 | Phase | Test |
 |---|---|
 | 1 | `python -c "from backend.db.schema import init_db; init_db()"` — no errors |
-| 2 | `GET /api/scrape/greenhouse` → `GET /api/jobs?score_min=0.6` returns rows |
+| 2 | `POST /api/scrape/greenhouse` → `GET /api/jobs?score_min=0.6` returns rows |
 | 3 | `http://localhost:3000` renders Jobs page with real data |
-| 4 | "find new jobs" skill invocation streams scout output, DB grows |
-| 5 | Drag card in Pipeline → status change reflected in `GET /api/applications` |
-| 6 | "draft cover letter for job 1" → Cover Letter page populates |
-| 7 | `GET /api/agent/status` returns pipeline summary |
+| 4 | `POST /api/scrape/all` → JobSpy returns jobs from ≥2 boards; DB row count grows; all new rows have scores |
+| 5 | `GET /api/applications` returns `{status: [...]}` grouping; `PUT /api/applications/{id}` persists status change |
+| 6 | Drag card in Pipeline → status change reflected in `GET /api/applications` |
+| 7 | After scrape: jobs older than TTL window are deleted; jobs scored below floor are dropped |
 | 8 | `git clone` + `cp -r profiles/template profiles/me` + `docker-compose up` — full system up on fresh machine |
+| 9 | Without key: `GET /api/ai/status` → `{"available": false}`; draft button absent in UI. With key: `POST /api/ai/draft/1` streams cover letter |
+| 10 | Cover Letter page renders with key present; missing without — no error state |
 
 ---
 
@@ -511,6 +514,7 @@ For boards already covered by JobSpy (Indeed, LinkedIn, ZipRecruiter, Glassdoor)
 | Dice API key rotates | Discover new key via DevTools MCP (embedded in Dice frontend JS); update `dice.py:17` |
 | Profile symlink breaks on Windows | Provide `ACTIVE_PROFILE_PATH` env var as fallback for Windows devs |
 | SQLite contention under concurrent scrapes | Scrapers run sequentially; WAL mode enabled at init |
+| DB grows unbounded over time | TTL cleanup deletes jobs older than N days (not in applications) after every scrape; score floor drops jobs below 0.3 at insert time |
 | Frontend build complexity for new contributors | Vite + React is standard; Dockerfile handles build; no custom toolchain |
 | ToS violation if operated as SaaS | This is a self-hosted personal tool — each user scrapes on their own behalf. Do not build a centralized hosted service that scrapes LinkedIn/Indeed on behalf of users. |
 

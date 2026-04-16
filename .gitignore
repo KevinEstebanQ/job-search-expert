@@ -38,3 +38,10 @@ Thumbs.db
 
 # PDFs and user-uploaded files (read-only originals, not for version control)
 user_files/
+
+# Runtime artifacts
+nohup.out
+*.log
+
+# Frontend local env overrides
+frontend/.env.local

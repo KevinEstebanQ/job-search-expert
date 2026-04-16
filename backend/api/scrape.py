@@ -1,4 +1,5 @@
 import json
+import os
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from backend.db.schema import get_connection
 from backend.profile.loader import load_preferences
@@ -7,6 +8,38 @@ from backend.scoring.score import score_job_row
 router = APIRouter(prefix="/api/scrape", tags=["scrape"])
 
 VALID_SOURCES = {"greenhouse", "remoteok", "dice", "jobspy", "all"}
+
+_JOB_TTL_DAYS = int(os.getenv("JOB_TTL_DAYS", "30"))
+_SCORE_FLOOR = float(os.getenv("SCORE_FLOOR", "0.3"))
+
+
+def _cleanup(conn) -> dict:
+    """
+    Two cleanup passes that run after every scrape + score cycle:
+    1. TTL: delete jobs older than JOB_TTL_DAYS not tracked in applications
+    2. Score floor: delete jobs scored below SCORE_FLOOR not tracked in applications
+    Protected rows (any application row referencing the job) are never deleted.
+    """
+    with conn:
+        ttl_deleted = conn.execute(
+            """
+            DELETE FROM jobs
+            WHERE date_scraped < datetime('now', :offset)
+              AND id NOT IN (SELECT job_id FROM applications)
+            """,
+            {"offset": f"-{_JOB_TTL_DAYS} days"},
+        ).rowcount
+
+        floor_deleted = conn.execute(
+            """
+            DELETE FROM jobs
+            WHERE score IS NOT NULL AND score < :floor
+              AND id NOT IN (SELECT job_id FROM applications)
+            """,
+            {"floor": _SCORE_FLOOR},
+        ).rowcount
+
+    return {"ttl_deleted": ttl_deleted, "floor_deleted": floor_deleted}
 
 
 def _score_unscored(conn) -> int:
@@ -63,12 +96,13 @@ def trigger_scrape(source: str, background_tasks: BackgroundTasks):
         except Exception as e:
             results.append({"source": src, "status": "error", "error": str(e)})
 
-    # Score any newly inserted jobs
+    # Score any newly inserted jobs, then clean up stale / low-quality rows
     conn = get_connection()
     scored_count = _score_unscored(conn)
+    cleanup = _cleanup(conn)
     conn.close()
 
-    return {"results": results, "jobs_scored": scored_count}
+    return {"results": results, "jobs_scored": scored_count, **cleanup}
 
 
 @router.get("/log")

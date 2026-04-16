@@ -50,3 +50,25 @@ export function triggerScrape(source = 'all') {
 export function getScrapeLog() {
   return req('/api/scrape/log')
 }
+
+export function getApplications() {
+  return req('/api/applications')
+}
+
+export function getApplication(id) {
+  return req(`/api/applications/${id}`)
+}
+
+export function updateApplication(id, body) {
+  return req(`/api/applications/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+export function saveCoverLetter(id, text) {
+  return req(`/api/applications/${id}/cover-letter`, {
+    method: 'PUT',
+    body: JSON.stringify({ cover_letter: text }),
+  })
+}

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 from backend.db.schema import init_db
+from backend.api.ai import router as ai_router
 from backend.api.applications import router as applications_router
 from backend.api.jobs import router as jobs_router
 from backend.api.scrape import router as scrape_router
@@ -34,6 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(ai_router)
 app.include_router(applications_router)
 app.include_router(jobs_router)
 app.include_router(scrape_router)

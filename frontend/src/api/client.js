@@ -72,3 +72,33 @@ export function saveCoverLetter(id, text) {
     body: JSON.stringify({ cover_letter: text }),
   })
 }
+
+export function getAiStatus() {
+  return req('/api/ai/status')
+}
+
+// Async generator — yields {chunk} events then a final {done: true}
+export async function* draftCoverLetter(jobId) {
+  const BASE = import.meta.env.VITE_API_BASE ?? ''
+  const res = await fetch(`${BASE}/api/ai/draft/${jobId}`, { method: 'POST' })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => res.statusText)
+    throw new Error(`${res.status}: ${msg}`)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop()
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      try {
+        yield JSON.parse(line.slice(6))
+      } catch { /* skip malformed */ }
+    }
+  }
+}

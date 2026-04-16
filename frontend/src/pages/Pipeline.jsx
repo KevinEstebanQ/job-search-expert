@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { getApplications, updateApplication } from '../api/client'
 
 const COLUMN_ORDER = [
@@ -293,7 +294,33 @@ function AppModal({ app, onClose, onUpdate }) {
         </div>
 
         {/* Actions */}
-        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)' }}>
+          <Link
+            to={`/cover-letter/${app.job_id}`}
+            onClick={onClose}
+            style={{
+              padding: '6px 12px',
+              fontFamily: 'var(--font-display)',
+              fontSize: '12px',
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              borderRadius: 'var(--radius)',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-elevated)',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+              textDecoration: 'none',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.borderColor = 'var(--accent)' }}
+            onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'var(--border)' }}
+          >
+            Draft Letter
+          </Link>
+          <div style={{ flex: 1 }} />
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn btn-accent" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save'}

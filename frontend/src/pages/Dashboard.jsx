@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { getStats, getJobs, triggerScrape } from '../api/client'
+import { getStats, getJobs, triggerScrape, getProfile } from '../api/client'
 import JobCard from '../components/JobCard'
 import ScoreBadge from '../components/ScoreBadge'
 
@@ -93,14 +93,17 @@ export default function Dashboard() {
   const [stats, setStats] = useState(null)
   const [picks, setPicks] = useState([])
   const [loading, setLoading] = useState(true)
+  const [profileComplete, setProfileComplete] = useState(true)
 
   const fetchData = useCallback(async () => {
     try {
-      const [statsData, jobsData] = await Promise.all([
+      const [statsData, jobsData, profileData] = await Promise.all([
         getStats(),
         getJobs({ score_min: 0.65, limit: 5, offset: 0 }),
+        getProfile(),
       ])
       setStats(statsData)
+      setProfileComplete(profileData.complete)
       // Top picks = highest scored with no application
       const unreviewed = jobsData.jobs.filter(j => !j.app_status).slice(0, 5)
       setPicks(unreviewed.length ? unreviewed : jobsData.jobs.slice(0, 5))
@@ -142,6 +145,29 @@ export default function Dashboard() {
         </div>
         <ScoutButton onComplete={fetchData} />
       </div>
+
+      {/* Onboarding banner */}
+      {!profileComplete && !loading && (
+        <div style={{
+          marginBottom: '24px',
+          padding: '14px 18px',
+          background: 'var(--bg-elevated)',
+          borderLeft: '3px solid var(--score-mid)',
+          borderRadius: 'var(--radius)',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: '12px', flexWrap: 'wrap',
+        }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-muted)' }}>
+            Profile not set up — jobs won't be scored accurately.
+          </span>
+          <Link
+            to="/profile"
+            style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--score-mid)', borderBottom: '1px solid var(--score-mid)', flexShrink: 0 }}
+          >
+            Set up your profile →
+          </Link>
+        </div>
+      )}
 
       {/* Stats */}
       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '36px' }}>

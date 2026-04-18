@@ -10,6 +10,7 @@ from backend.db.schema import init_db
 from backend.api.ai import router as ai_router
 from backend.api.applications import router as applications_router
 from backend.api.jobs import router as jobs_router
+from backend.api.profile import router as profile_router
 from backend.api.scrape import router as scrape_router
 from backend.api.stats import router as stats_router
 
@@ -38,6 +39,7 @@ app.add_middleware(
 app.include_router(ai_router)
 app.include_router(applications_router)
 app.include_router(jobs_router)
+app.include_router(profile_router)
 app.include_router(scrape_router)
 app.include_router(stats_router)
 

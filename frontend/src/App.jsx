@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Jobs from './pages/Jobs'
 import Pipeline from './pages/Pipeline'
 import CoverLetter from './pages/CoverLetter'
+import Profile from './pages/Profile'
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
         <Route path="/jobs" element={<Jobs />} />
         <Route path="/pipeline" element={<Pipeline />} />
         <Route path="/cover-letter/:jobId" element={<CoverLetter />} />
+        <Route path="/profile" element={<Profile />} />
       </Routes>
     </BrowserRouter>
   )

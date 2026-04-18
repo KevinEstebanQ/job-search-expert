@@ -6,8 +6,8 @@ services:
     volumes:
       # Persist the SQLite DB across container restarts
       - ./db:/app/db
-      # Active profile mounted read-only — user sets up profiles/active on host
-      - ./profiles/active:/app/profile:ro
+      # Profile directory — auto-provisioned by the app on first run
+      - ./profiles/me:/app/profile
     env_file:
       - path: .env
         required: false   # scrapers/API work without it; only agent endpoints need ANTHROPIC_API_KEY

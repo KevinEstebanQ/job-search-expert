@@ -84,6 +84,22 @@ export default function Nav() {
       >
         Pipeline
       </NavLink>
+      <NavLink
+        to="/profile"
+        style={({ isActive }) => ({
+          fontFamily: 'var(--font-display)',
+          fontSize: '13px',
+          fontWeight: 600,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          color: isActive ? 'var(--text)' : 'var(--text-muted)',
+          borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+          paddingBottom: '2px',
+          transition: 'color 0.15s ease',
+        })}
+      >
+        Profile
+      </NavLink>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
         <span
           style={{

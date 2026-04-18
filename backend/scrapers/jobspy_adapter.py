@@ -19,6 +19,11 @@ Env vars (all optional — defaults shown):
   JOBSPY_LOCATION        United States
   JOBSPY_HOURS_OLD       72
   JOBSPY_RESULTS_WANTED  50
+
+Two-pass scraping: when JOBSPY_LOCATION is set to anything other than "United States",
+the adapter runs two searches — one remote-only US-wide pass to catch fully-remote
+roles, and one location-specific pass (no remote filter) to catch onsite/hybrid roles
+near the target city. Results are merged and deduplicated by URL.
 """
 import os
 
@@ -81,20 +86,40 @@ class JobSpyScraper(BaseScraper):
         self.hours_old = hours_old
         self.results_wanted = results_wanted
 
-    def fetch_jobs(self) -> list[dict]:
-        df = scrape_jobs(
+    def _scrape_df(self, location: str, is_remote: bool | None):
+        kwargs = dict(
             site_name=self.sites,
             search_term=self.search_term,
-            location=self.location,
+            location=location,
             hours_old=self.hours_old,
             results_wanted=self.results_wanted,
-            is_remote=True,
             description_format="markdown",
             verbose=0,
         )
+        if is_remote is not None:
+            kwargs["is_remote"] = is_remote
+        return scrape_jobs(**kwargs)
 
-        if df is None or df.empty:
-            return []
+    def fetch_jobs(self) -> list[dict]:
+        local_location = self.location
+        run_two_pass = local_location.lower() not in ("united states", "us", "usa", "remote")
+
+        if run_two_pass:
+            # Pass 1: remote-only, US-wide — catch fully-remote roles everywhere
+            df_remote = self._scrape_df("United States", is_remote=True)
+            # Pass 2: local area, no remote filter — catch onsite/hybrid near target city
+            df_local = self._scrape_df(local_location, is_remote=None)
+            frames = [f for f in (df_remote, df_local) if f is not None and not f.empty]
+            if not frames:
+                return []
+            combined = pd.concat(frames, ignore_index=True)
+            # Deduplicate by job_url — keep first occurrence
+            df = combined.drop_duplicates(subset=["job_url"], keep="first")
+            print(f"[jobspy] two-pass: remote={len(df_remote) if df_remote is not None else 0} + local({local_location})={len(df_local) if df_local is not None else 0} → {len(df)} unique")
+        else:
+            df = self._scrape_df(local_location, is_remote=True)
+            if df is None or df.empty:
+                return []
 
         jobs = []
         for _, row in df.iterrows():

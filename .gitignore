@@ -45,3 +45,8 @@ nohup.out
 
 # Frontend local env overrides
 frontend/.env.local
+
+# Codex local artifacts
+.codex
+docs/fix-plan-profile-targeting.md
+docs/product-behavior-test-plan.md

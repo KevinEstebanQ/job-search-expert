@@ -77,6 +77,14 @@ export function getAiStatus() {
   return req('/api/ai/status')
 }
 
+export function getProfile() {
+  return req('/api/profile')
+}
+
+export function saveProfile(body) {
+  return req('/api/profile', { method: 'PUT', body: JSON.stringify(body) })
+}
+
 // Async generator — yields {chunk} events then a final {done: true}
 export async function* draftCoverLetter(jobId) {
   const BASE = import.meta.env.VITE_API_BASE ?? ''

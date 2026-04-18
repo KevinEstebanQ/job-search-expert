@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { getJobs } from '../api/client'
 import JobCard from '../components/JobCard'
 
-const SOURCES = ['greenhouse', 'remoteok', 'dice', 'indeed', 'wellfound', 'linkedin']
-const SOURCE_LABELS = { greenhouse: 'Greenhouse', remoteok: 'RemoteOK', dice: 'Dice', indeed: 'Indeed', wellfound: 'Wellfound', linkedin: 'LinkedIn' }
+const SOURCES = ['linkedin', 'indeed', 'glassdoor', 'zip_recruiter', 'dice', 'greenhouse', 'remoteok']
+const SOURCE_LABELS = { linkedin: 'LinkedIn', indeed: 'Indeed', glassdoor: 'Glassdoor', zip_recruiter: 'ZipRecruiter', dice: 'Dice', greenhouse: 'Greenhouse', remoteok: 'RemoteOK' }
 const SCORE_PRESETS = [
   { label: 'All', value: 0 },
   { label: '≥0.65', value: 0.65 },
@@ -58,7 +58,7 @@ export default function Jobs() {
     try {
       const data = await getJobs({ ...filters, limit: PAGE_SIZE, offset: currentOffset })
       const fetched = data.jobs || []
-      setTotal(data.count ?? 0)
+      setTotal(data.total ?? data.count ?? 0)
       setJobs(prev => reset ? fetched : [...prev, ...fetched])
       setHasMore(fetched.length === PAGE_SIZE)
     } catch (e) {

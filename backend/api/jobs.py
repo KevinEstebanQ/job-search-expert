@@ -59,6 +59,12 @@ def list_jobs(
     where_clause = " AND ".join(where)
     join = "LEFT JOIN applications a ON a.job_id = j.id"
 
+    # Total count across all pages (same WHERE, no LIMIT)
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM jobs j {join} WHERE {where_clause}",
+        params,
+    ).fetchone()[0]
+
     query = f"""
         SELECT j.*, a.status as app_status, a.id as app_id
         FROM jobs j
@@ -71,7 +77,7 @@ def list_jobs(
 
     rows = conn.execute(query, params).fetchall()
     conn.close()
-    return {"jobs": [_row_to_dict(r) for r in rows], "count": len(rows)}
+    return {"jobs": [_row_to_dict(r) for r in rows], "count": len(rows), "total": total}
 
 
 @router.get("/{job_id}")

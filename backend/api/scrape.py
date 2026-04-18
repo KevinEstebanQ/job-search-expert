@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from backend.db.schema import get_connection
 from backend.profile.loader import load_preferences, load_resume
@@ -10,9 +12,20 @@ router = APIRouter(prefix="/api/scrape", tags=["scrape"])
 VALID_SOURCES = {"greenhouse", "remoteok", "dice", "jobspy", "all"}
 
 _DICE_MAX_QUERIES = 3
+_JOBSPY_LOC_CAP = 3          # max locations passed to JobSpyScraper per run
+_FLOOR_MAX_DELETE_RATIO = 0.60  # guardrail: never hard-delete more than this share per run
 
 _JOB_TTL_DAYS = int(os.getenv("JOB_TTL_DAYS", "30"))
 _SCORE_FLOOR = float(os.getenv("SCORE_FLOOR", "0.3"))
+
+# In-memory scrape state — single-user tool, no need for distributed state
+_scrape_lock = threading.Lock()
+_scrape_state: dict = {
+    "running": False,
+    "source": None,
+    "started_at": None,
+    "last_result": None,   # summary of the most recently completed scrape
+}
 
 
 def _profile_is_complete(prefs: dict) -> bool:
@@ -26,11 +39,11 @@ def _profile_is_complete(prefs: dict) -> bool:
 def _cleanup(conn, prefs: dict | None = None) -> dict:
     """
     Two cleanup passes that run after every scrape + score cycle:
-    1. TTL: delete jobs older than JOB_TTL_DAYS not tracked in applications
+    1. TTL: delete jobs older than JOB_TTL_DAYS not tracked in applications.
     2. Score floor: delete jobs scored below SCORE_FLOOR — only when profile is complete.
-       If profile is incomplete the floor deletion is skipped to prevent a near-empty
-       default profile from wiping the entire DB after the first scrape.
-    Protected rows (any application row referencing the job) are never deleted.
+       Protected rows (any application row) are never deleted.
+       Guardrail: floor deletion never removes more than _FLOOR_MAX_DELETE_RATIO of all
+       jobs in one pass; excess candidates are left and will be cleaned up in future runs.
     """
     if prefs is None:
         prefs = load_preferences()
@@ -45,7 +58,44 @@ def _cleanup(conn, prefs: dict | None = None) -> dict:
             {"offset": f"-{_JOB_TTL_DAYS} days"},
         ).rowcount
 
-        if _profile_is_complete(prefs):
+        if not _profile_is_complete(prefs):
+            return {
+                "ttl_deleted": ttl_deleted,
+                "floor_deleted": 0,
+                "floor_cleanup_skipped": True,
+                "guardrail_triggered": False,
+                "floor_candidate_count": 0,
+            }
+
+        # Count how many jobs would be floor-deleted (excluding protected rows)
+        candidate_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM jobs
+            WHERE score IS NOT NULL AND score < :floor
+              AND id NOT IN (SELECT job_id FROM applications)
+            """,
+            {"floor": _SCORE_FLOOR},
+        ).fetchone()[0]
+
+        total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+
+        if total_jobs > 0 and candidate_count / total_jobs > _FLOOR_MAX_DELETE_RATIO:
+            # Guardrail: only delete the lowest-scored rows up to the allowed ratio
+            max_deletable = int(total_jobs * _FLOOR_MAX_DELETE_RATIO)
+            floor_deleted = conn.execute(
+                """
+                DELETE FROM jobs WHERE id IN (
+                    SELECT id FROM jobs
+                    WHERE score IS NOT NULL AND score < :floor
+                      AND id NOT IN (SELECT job_id FROM applications)
+                    ORDER BY score ASC
+                    LIMIT :lim
+                )
+                """,
+                {"floor": _SCORE_FLOOR, "lim": max_deletable},
+            ).rowcount
+            guardrail = True
+        else:
             floor_deleted = conn.execute(
                 """
                 DELETE FROM jobs
@@ -54,15 +104,14 @@ def _cleanup(conn, prefs: dict | None = None) -> dict:
                 """,
                 {"floor": _SCORE_FLOOR},
             ).rowcount
-            floor_skipped = False
-        else:
-            floor_deleted = 0
-            floor_skipped = True
+            guardrail = False
 
     return {
         "ttl_deleted": ttl_deleted,
         "floor_deleted": floor_deleted,
-        "floor_cleanup_skipped": floor_skipped,
+        "floor_cleanup_skipped": False,
+        "guardrail_triggered": guardrail,
+        "floor_candidate_count": candidate_count,
     }
 
 
@@ -120,6 +169,14 @@ def _build_dice_queries(prefs: dict) -> list[str] | None:
     return queries or None
 
 
+def _build_jobspy_locations(prefs: dict) -> list[str]:
+    """Extract up to _JOBSPY_LOC_CAP non-remote locations from profile for multi-pass JobSpy."""
+    return [
+        loc for loc in prefs.get("target_locations", [])
+        if loc.strip().lower() not in ("remote", "")
+    ][:_JOBSPY_LOC_CAP]
+
+
 def _run_scraper(source: str, prefs: dict | None = None) -> dict:
     if prefs is None:
         prefs = load_preferences()
@@ -127,7 +184,13 @@ def _run_scraper(source: str, prefs: dict | None = None) -> dict:
     if source == "greenhouse":
         from backend.scrapers.greenhouse import GreenhouseScraper
         profile_companies = prefs.get("greenhouse_companies") or None
-        return GreenhouseScraper(companies=profile_companies).run()
+        target_locs = prefs.get("target_locations", [])
+        remote_ok = prefs.get("remote_ok", True)
+        return GreenhouseScraper(
+            companies=profile_companies,
+            location_hints=target_locs or None,
+            remote_ok=remote_ok,
+        ).run()
     if source == "remoteok":
         from backend.scrapers.remoteok import RemoteOKScraper
         return RemoteOKScraper().run()
@@ -136,7 +199,6 @@ def _run_scraper(source: str, prefs: dict | None = None) -> dict:
         return DiceScraper(queries=_build_dice_queries(prefs)).run()
     if source == "jobspy":
         from backend.scrapers.jobspy_adapter import JobSpyScraper
-        # Search term: first target title + first must-have skill, fallback to env default
         titles = prefs.get("target_titles", [])
         must_have = prefs.get("skill_sets", {}).get("must_have", [])
         if titles:
@@ -144,27 +206,42 @@ def _run_scraper(source: str, prefs: dict | None = None) -> dict:
             if must_have:
                 term = f"{term} {must_have[0]}"
         else:
-            term = None  # JobSpyScraper uses env default
-        kwargs = {"search_term": term} if term else {}
-        # Location: use first non-remote entry from profile, else let JobSpyScraper use env default
-        non_remote_locs = [
-            loc for loc in prefs.get("target_locations", [])
-            if loc.strip().lower() not in ("remote", "")
-        ]
-        location_override = non_remote_locs[0] if non_remote_locs else None
-        loc_kwargs = {"location": location_override} if location_override else {}
-        return JobSpyScraper(**kwargs, **loc_kwargs).run()
+            term = None
+        locs = _build_jobspy_locations(prefs)
+        kwargs: dict = {}
+        if term:
+            kwargs["search_term"] = term
+        if locs:
+            kwargs["locations"] = locs
+        return JobSpyScraper(**kwargs).run()
     raise NotImplementedError(f"Scraper not yet implemented: {source}")
 
 
-@router.post("/{source}")
-def trigger_scrape(source: str, background_tasks: BackgroundTasks):
-    if source not in VALID_SOURCES:
-        raise HTTPException(status_code=400, detail=f"Unknown source: {source}. Valid: {VALID_SOURCES}")
+def _build_query_plan(source: str, prefs: dict) -> dict:
+    """Build a human-readable summary of what parameters each scraper will use."""
+    plan: dict = {"source": source}
+    if source in ("jobspy", "all"):
+        titles = prefs.get("target_titles", [])
+        must_have = prefs.get("skill_sets", {}).get("must_have", [])
+        if titles:
+            term = f"{titles[0]} {must_have[0]}".strip() if must_have else titles[0]
+        else:
+            term = "<env default>"
+        plan["jobspy_search_term"] = term
+        locs = _build_jobspy_locations(prefs)
+        plan["jobspy_locations"] = locs or ["<env default>"]
+    if source in ("dice", "all"):
+        plan["dice_queries"] = _build_dice_queries(prefs) or ["<default queries>"]
+    if source in ("greenhouse", "all"):
+        plan["greenhouse_companies"] = prefs.get("greenhouse_companies") or ["<default list>"]
+        plan["greenhouse_location_filter"] = bool(prefs.get("target_locations"))
+    return plan
 
+
+def _do_scrape(source: str, prefs: dict) -> None:
+    """Background task: run scrapers, score, clean up, update state on completion."""
     sources = ["greenhouse", "remoteok", "dice", "jobspy"] if source == "all" else [source]
     results = []
-    prefs = load_preferences()
 
     for src in sources:
         try:
@@ -175,13 +252,57 @@ def trigger_scrape(source: str, background_tasks: BackgroundTasks):
         except Exception as e:
             results.append({"source": src, "status": "error", "error": str(e)})
 
-    # Score any newly inserted jobs, then clean up stale / low-quality rows
     conn = get_connection()
     scored_count = _score_unscored(conn)
     cleanup = _cleanup(conn, prefs=prefs)
     conn.close()
 
-    return {"results": results, "jobs_scored": scored_count, **cleanup}
+    summary = {
+        "results": results,
+        "jobs_scored": scored_count,
+        "effective_query_plan": _build_query_plan(source, prefs),
+        **cleanup,
+    }
+
+    with _scrape_lock:
+        _scrape_state["running"] = False
+        _scrape_state["source"] = None
+        _scrape_state["started_at"] = None
+        _scrape_state["last_result"] = summary
+
+
+@router.get("/status")
+def scrape_status():
+    """Poll this to check whether a background scrape is in progress and read last results."""
+    with _scrape_lock:
+        return {**_scrape_state}
+
+
+@router.post("/{source}")
+def trigger_scrape(source: str, background_tasks: BackgroundTasks):
+    if source not in VALID_SOURCES:
+        raise HTTPException(status_code=400, detail=f"Unknown source: {source}. Valid: {VALID_SOURCES}")
+
+    with _scrape_lock:
+        if _scrape_state["running"]:
+            return {
+                "status": "already_running",
+                "source": _scrape_state["source"],
+                "started_at": _scrape_state["started_at"],
+            }
+        _scrape_state["running"] = True
+        _scrape_state["source"] = source
+        _scrape_state["started_at"] = datetime.now(timezone.utc).isoformat()
+        _scrape_state["last_result"] = None
+
+    prefs = load_preferences()
+    background_tasks.add_task(_do_scrape, source, prefs)
+
+    return {
+        "status": "started",
+        "source": source,
+        "effective_query_plan": _build_query_plan(source, prefs),
+    }
 
 
 @router.get("/log")

@@ -60,10 +60,28 @@ def _parse_salary(metadata: list[dict]) -> tuple[int | None, int | None]:
     return None, None
 
 
+def _location_matches_hints(location_str: str | None, hints: list[str]) -> bool:
+    """
+    True when the job's location string contains any of the profile's location hints,
+    or when the location is unknown (empty/None) — benefit of the doubt.
+    Matching is case-insensitive substring: "FL" matches "Tampa, FL", "Florida" matches
+    "Orlando, Florida, US", etc.
+    """
+    if not location_str:
+        return True  # unknown location → keep
+    loc_lower = location_str.lower()
+    return any(h.lower() in loc_lower or loc_lower in h.lower() for h in hints)
+
+
 class GreenhouseScraper(BaseScraper):
     source = "greenhouse"
 
-    def __init__(self, companies: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        companies: list[str] | None = None,
+        location_hints: list[str] | None = None,
+        remote_ok: bool = True,
+    ) -> None:
         super().__init__()
         env_companies = os.environ.get("GREENHOUSE_COMPANIES", "")
         if companies:
@@ -72,6 +90,41 @@ class GreenhouseScraper(BaseScraper):
             self.companies = [c.strip() for c in env_companies.split(",") if c.strip()]
         else:
             self.companies = DEFAULT_COMPANIES
+        # location_hints: non-empty list activates post-fetch geographic pre-filter
+        self.location_hints: list[str] = [
+            h for h in (location_hints or []) if h.strip().lower() not in ("remote", "")
+        ]
+        self.remote_ok = remote_ok
+
+    def _apply_location_filter(self, jobs: list[dict]) -> list[dict]:
+        """
+        Post-fetch filter: keep jobs that match target locations, are remote (when
+        remote_ok), or have unknown location. Only active when location_hints is set.
+        """
+        if not self.location_hints:
+            return jobs
+
+        kept = []
+        for job in jobs:
+            rt = (job.get("remote_type") or "").lower()
+            loc = job.get("location") or ""
+
+            # Remote jobs pass when remote_ok
+            if rt == "remote" and self.remote_ok:
+                kept.append(job)
+                continue
+            if "remote" in loc.lower() and self.remote_ok:
+                kept.append(job)
+                continue
+
+            # Location match or unknown
+            if _location_matches_hints(loc, self.location_hints):
+                kept.append(job)
+
+        filtered_out = len(jobs) - len(kept)
+        if filtered_out:
+            print(f"[greenhouse] location pre-filter: kept {len(kept)}/{len(jobs)} (removed {filtered_out} out-of-target)")
+        return kept
 
     def fetch_jobs(self) -> list[dict]:
         jobs = []
@@ -104,7 +157,8 @@ class GreenhouseScraper(BaseScraper):
                 except httpx.HTTPError as e:
                     print(f"[greenhouse] HTTP error for {slug}: {e}")
                 time.sleep(_RATE_LIMIT_DELAY)
-        return jobs
+
+        return self._apply_location_filter(jobs)
 
 
 if __name__ == "__main__":

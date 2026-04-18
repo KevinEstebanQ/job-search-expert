@@ -47,6 +47,10 @@ export function triggerScrape(source = 'all') {
   return req(`/api/scrape/${source}`, { method: 'POST' })
 }
 
+export function getScrapeStatus() {
+  return req('/api/scrape/status')
+}
+
 export function getScrapeLog() {
   return req('/api/scrape/log')
 }

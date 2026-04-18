@@ -29,6 +29,25 @@ _MAX_PAGES = 3
 _RATE_LIMIT_DELAY = 1.0
 
 
+def _best_job_url(job: dict, job_id: str) -> str:
+    """
+    Prefer Dice's canonical details URL when provided by the API.
+    Fallbacks:
+    1) detailsPageUrl
+    2) GUID-based details route
+    3) legacy id-based details route
+    """
+    details = (job.get("detailsPageUrl") or "").strip()
+    if details:
+        return details
+
+    guid = (job.get("guid") or "").strip()
+    if guid:
+        return f"https://www.dice.com/job-detail/{guid}"
+
+    return f"https://www.dice.com/job-detail/{job.get('id', job_id)}"
+
+
 def _detect_remote(job: dict) -> str | None:
     work_type = (job.get("workplaceTypes") or [])
     for wt in work_type:
@@ -69,7 +88,7 @@ class DiceScraper(BaseScraper):
                             "pageSize": _PAGE_SIZE,
                             "pageNum": page,
                             "facets": "employmentType|postedDate|workplaceTypes|employerType",
-                            "fields": "id|jobId|guid|summary|title|postedDate|modifiedDate|jobLocation|salary|clientBrandId|companyPageUrl|companyLogoUrl|positionId|companyName|employmentType|isHighlighted|score|easyApply|employerType|workplaceTypes|isRemote",
+                            "fields": "id|jobId|guid|summary|title|postedDate|modifiedDate|jobLocation|salary|clientBrandId|companyPageUrl|companyLogoUrl|positionId|companyName|employmentType|isHighlighted|score|easyApply|employerType|workplaceTypes|isRemote|detailsPageUrl",
                             "culture": "en",
                             "recommendations": "true",
                             "interactionId": "0",
@@ -95,8 +114,6 @@ class DiceScraper(BaseScraper):
                                 location_obj = location_obj[0] if location_obj else {}
                             location_str = location_obj.get("displayName") or location_obj.get("city") or ""
 
-                            salary = job.get("salary") or ""
-
                             jobs.append({
                                 "external_id": job_id,
                                 "source": self.source,
@@ -104,7 +121,7 @@ class DiceScraper(BaseScraper):
                                 "company": job.get("companyName", "Unknown"),
                                 "location": location_str or None,
                                 "remote_type": _detect_remote(job),
-                                "url": f"https://www.dice.com/job-detail/{job.get('id', job_id)}",
+                                "url": _best_job_url(job, job_id),
                                 "description_raw": job.get("summary"),
                                 "salary_min": None,
                                 "salary_max": None,

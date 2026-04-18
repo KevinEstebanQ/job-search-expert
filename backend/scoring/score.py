@@ -92,7 +92,7 @@ def _title_score(job: dict, target_titles: list[str]) -> tuple[float, str]:
         target_lower = target.lower()
         if target_lower in title:
             # Full phrase match
-            score = max(score, 0.25)
+            score = max(score, 0.30)
         else:
             # Token overlap: any word >3 chars from target found in title
             tokens = [w for w in target_lower.split() if len(w) > 3]
@@ -100,9 +100,12 @@ def _title_score(job: dict, target_titles: list[str]) -> tuple[float, str]:
                 score = max(score, 0.15)
 
     if _SENIOR_TERMS.search(title):
-        score = max(score - 0.2, 0.0)
+        # Downrank senior/lead/staff titles — they're above the target seniority band.
+        # Use a softer -0.1 penalty (was -0.2) so FL senior jobs aren't buried by the
+        # score floor when description is unavailable (LinkedIn returns null descriptions).
+        score = max(score - 0.1, 0.0)
 
-    final = round(min(score, 0.3), 3)
+    final = round(min(score, 0.35), 3)
     return final, f"title={final}"
 
 

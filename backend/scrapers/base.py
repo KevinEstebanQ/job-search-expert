@@ -63,7 +63,8 @@ class BaseScraper(ABC):
 
     def upsert_jobs(self, jobs: list[dict], conn: sqlite3.Connection) -> int:
         """
-        Insert or ignore jobs. Returns count of newly inserted rows.
+        Insert new jobs and refresh existing job fields on conflict.
+        Returns count of newly inserted rows.
         Dedup is handled by UNIQUE(source, external_id) constraint.
         """
         new_count = 0
@@ -83,6 +84,26 @@ class BaseScraper(ABC):
                 )
                 if cursor.rowcount > 0:
                     new_count += 1
+                else:
+                    # Existing row: refresh mutable fields so URL/title/location/etc stay current.
+                    conn.execute(
+                        """
+                        UPDATE jobs
+                        SET
+                            title = :title,
+                            company = :company,
+                            location = :location,
+                            remote_type = :remote_type,
+                            url = :url,
+                            description_raw = :description_raw,
+                            salary_min = :salary_min,
+                            salary_max = :salary_max,
+                            date_posted = :date_posted,
+                            date_scraped = datetime('now')
+                        WHERE source = :source AND external_id = :external_id
+                        """,
+                        job,
+                    )
             except sqlite3.Error as e:
                 print(f"[{self.source}] DB error on job {job.get('external_id')}: {e}")
         return new_count

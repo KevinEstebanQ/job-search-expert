@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { getStats, getJobs, triggerScrape, getProfile } from '../api/client'
+import { getStats, getJobs, triggerScrape, getScrapeStatus, getProfile } from '../api/client'
 import JobCard from '../components/JobCard'
 import ScoreBadge from '../components/ScoreBadge'
 
@@ -38,21 +38,46 @@ function StatCard({ label, value, accent }) {
 function ScoutButton({ onComplete }) {
   const [state, setState] = useState('idle') // idle | running | done
   const [result, setResult] = useState(null)
+  const pollRef = useRef(null)
+
+  function stopPolling() {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
 
   async function run() {
     setState('running')
     setResult(null)
     try {
-      const data = await triggerScrape('all')
-      setResult(data)
-      setState('done')
-      onComplete?.()
-      setTimeout(() => setState('idle'), 6000)
+      await triggerScrape('all')
     } catch (e) {
+      // already_running response comes back as 200, real errors abort here
       console.error(e)
       setState('idle')
+      return
     }
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await getScrapeStatus()
+        if (!status.running) {
+          stopPolling()
+          setResult(status.last_result)
+          setState('done')
+          onComplete?.()
+          setTimeout(() => setState('idle'), 8000)
+        }
+      } catch (e) {
+        console.error('poll error', e)
+        stopPolling()
+        setState('idle')
+      }
+    }, 4000)
   }
+
+  useEffect(() => () => stopPolling(), [])
 
   if (state === 'done' && result) {
     const total_new = result.results?.reduce((acc, r) => acc + (r.jobs_new || 0), 0) ?? 0

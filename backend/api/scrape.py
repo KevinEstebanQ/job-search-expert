@@ -48,6 +48,8 @@ def _cleanup(conn, prefs: dict | None = None) -> dict:
     if prefs is None:
         prefs = load_preferences()
 
+    profile_complete = _profile_is_complete(prefs)
+
     with conn:
         ttl_deleted = conn.execute(
             """
@@ -58,58 +60,52 @@ def _cleanup(conn, prefs: dict | None = None) -> dict:
             {"offset": f"-{_JOB_TTL_DAYS} days"},
         ).rowcount
 
-        if not _profile_is_complete(prefs):
-            return {
-                "ttl_deleted": ttl_deleted,
-                "floor_deleted": 0,
-                "floor_cleanup_skipped": True,
-                "guardrail_triggered": False,
-                "floor_candidate_count": 0,
-            }
-
-        # Count how many jobs would be floor-deleted (excluding protected rows)
-        candidate_count = conn.execute(
-            """
-            SELECT COUNT(*) FROM jobs
-            WHERE score IS NOT NULL AND score < :floor
-              AND id NOT IN (SELECT job_id FROM applications)
-            """,
-            {"floor": _SCORE_FLOOR},
-        ).fetchone()[0]
-
-        total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-
-        if total_jobs > 0 and candidate_count / total_jobs > _FLOOR_MAX_DELETE_RATIO:
-            # Guardrail: only delete the lowest-scored rows up to the allowed ratio
-            max_deletable = int(total_jobs * _FLOOR_MAX_DELETE_RATIO)
-            floor_deleted = conn.execute(
-                """
-                DELETE FROM jobs WHERE id IN (
-                    SELECT id FROM jobs
-                    WHERE score IS NOT NULL AND score < :floor
-                      AND id NOT IN (SELECT job_id FROM applications)
-                    ORDER BY score ASC
-                    LIMIT :lim
-                )
-                """,
-                {"floor": _SCORE_FLOOR, "lim": max_deletable},
-            ).rowcount
-            guardrail = True
+        if not profile_complete:
+            floor_deleted = 0
+            guardrail = False
+            candidate_count = 0
         else:
-            floor_deleted = conn.execute(
+            candidate_count = conn.execute(
                 """
-                DELETE FROM jobs
+                SELECT COUNT(*) FROM jobs
                 WHERE score IS NOT NULL AND score < :floor
                   AND id NOT IN (SELECT job_id FROM applications)
                 """,
                 {"floor": _SCORE_FLOOR},
-            ).rowcount
-            guardrail = False
+            ).fetchone()[0]
+
+            total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+
+            if total_jobs > 0 and candidate_count / total_jobs > _FLOOR_MAX_DELETE_RATIO:
+                max_deletable = int(total_jobs * _FLOOR_MAX_DELETE_RATIO)
+                floor_deleted = conn.execute(
+                    """
+                    DELETE FROM jobs WHERE id IN (
+                        SELECT id FROM jobs
+                        WHERE score IS NOT NULL AND score < :floor
+                          AND id NOT IN (SELECT job_id FROM applications)
+                        ORDER BY score ASC
+                        LIMIT :lim
+                    )
+                    """,
+                    {"floor": _SCORE_FLOOR, "lim": max_deletable},
+                ).rowcount
+                guardrail = True
+            else:
+                floor_deleted = conn.execute(
+                    """
+                    DELETE FROM jobs
+                    WHERE score IS NOT NULL AND score < :floor
+                      AND id NOT IN (SELECT job_id FROM applications)
+                    """,
+                    {"floor": _SCORE_FLOOR},
+                ).rowcount
+                guardrail = False
 
     return {
         "ttl_deleted": ttl_deleted,
         "floor_deleted": floor_deleted,
-        "floor_cleanup_skipped": False,
+        "floor_cleanup_skipped": not profile_complete,
         "guardrail_triggered": guardrail,
         "floor_candidate_count": candidate_count,
     }

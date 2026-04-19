@@ -238,9 +238,21 @@ export default function Dashboard() {
             fontSize: '12px',
             color: 'var(--text-dim)',
             padding: '32px 0',
+            lineHeight: 1.8,
           }}
         >
-          No jobs in review queue (score ≥ 0.65). Run Scout to discover jobs.
+          {stats?.below_threshold > 0 ? (
+            <>
+              <span style={{ color: 'var(--score-mid)' }}>
+                {stats.below_threshold} jobs found but all score below 0.65.
+              </span>
+              {' '}Check your profile — <span style={{ color: 'var(--accent)' }}>must_have skills</span> drive the score ceiling.
+            </>
+          ) : stats?.total_jobs === 0 ? (
+            'No jobs in DB. Run Scout to discover jobs.'
+          ) : (
+            'No jobs in review queue (score ≥ 0.65). Run Scout to discover jobs.'
+          )}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

@@ -16,6 +16,11 @@ def _row_to_dict(row) -> dict:
             d["score_breakdown"] = json.loads(d["score_breakdown"])
         except (ValueError, TypeError):
             pass
+    if d.get("review_reasons") and isinstance(d["review_reasons"], str):
+        try:
+            d["review_reasons"] = json.loads(d["review_reasons"])
+        except (ValueError, TypeError):
+            pass
     return d
 
 
@@ -27,6 +32,7 @@ def list_jobs(
     remote_type: str | None = Query(None, description="remote|hybrid|onsite"),
     search: str | None = Query(None, description="Keyword search in title and company"),
     status: str | None = Query(None, description="Filter by application status: interested|applied|phone_screen|interview|offer|rejected|withdrawn"),
+    needs_review: bool | None = Query(None, description="Filter by review flag: true=flagged only, false=clean only"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -55,6 +61,10 @@ def list_jobs(
     if status:
         where.append("a.status = ?")
         params.append(status)
+    if needs_review is True:
+        where.append("j.needs_review = 1")
+    elif needs_review is False:
+        where.append("(j.needs_review IS NULL OR j.needs_review = 0)")
 
     where_clause = " AND ".join(where)
     join = "LEFT JOIN applications a ON a.job_id = j.id"
@@ -78,6 +88,61 @@ def list_jobs(
     rows = conn.execute(query, params).fetchall()
     conn.close()
     return {"jobs": [_row_to_dict(r) for r in rows], "count": len(rows), "total": total}
+
+
+@router.get("/review-queue")
+def review_queue(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Return all jobs flagged for manual review, sorted by score DESC."""
+    conn = get_connection()
+    total = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE needs_review = 1"
+    ).fetchone()[0]
+    rows = conn.execute(
+        """
+        SELECT j.*, a.status as app_status, a.id as app_id
+        FROM jobs j
+        LEFT JOIN applications a ON a.job_id = j.id
+        WHERE j.needs_review = 1
+        ORDER BY j.score DESC NULLS LAST, j.date_scraped DESC
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    ).fetchall()
+    conn.close()
+    return {"jobs": [_row_to_dict(r) for r in rows], "count": len(rows), "total": total}
+
+
+@router.post("/wipe")
+def wipe_jobs():
+    """Delete all jobs NOT referenced by any application row. Preserves applied/tracked jobs."""
+    conn = get_connection()
+    with conn:
+        deleted = conn.execute(
+            "DELETE FROM jobs WHERE id NOT IN (SELECT job_id FROM applications)"
+        ).rowcount
+        preserved = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+    conn.close()
+    return {"deleted": deleted, "preserved": preserved}
+
+
+@router.patch("/{job_id}/mark-reviewed")
+def mark_reviewed(job_id: int):
+    """Clear the needs_review flag on a job after user has manually inspected it."""
+    conn = get_connection()
+    row = conn.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Job not found")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET needs_review = 0, review_reasons = '[]' WHERE id = ?",
+            (job_id,),
+        )
+    conn.close()
+    return {"job_id": job_id, "needs_review": False}
 
 
 @router.get("/{job_id}")

@@ -7,7 +7,7 @@ Run: .venv/bin/pytest tests/ -v
 """
 import sqlite3
 import pytest
-from backend.scoring.score import score_job, _location_score, _negative_keyword_penalty, _skill_score, _experience_penalty, _title_score
+from backend.scoring.score import score_job, score_job_row, _location_score, _negative_keyword_penalty, _skill_score, _experience_penalty, _title_score
 from backend.db.schema import init_db
 
 
@@ -364,9 +364,19 @@ class TestExperiencePenalty:
         penalty, _ = _experience_penalty("10+ years required", max_years=3)
         assert penalty == -0.5
 
-    def test_picks_max_when_multiple_numbers(self):
-        # "2 to 5 years" — should penalize based on 5
+    def test_range_uses_low_end_no_penalty(self):
+        # "2 to 5 years" — low end 2 is within max_years=3, candidate fits → no penalty
         penalty, _ = _experience_penalty("2 to 5 years of experience", max_years=3)
+        assert penalty == 0.0
+
+    def test_range_low_end_over_max_triggers_penalty(self):
+        # "4 to 6 years" — low end 4 > max_years=3 → -0.2 penalty
+        penalty, _ = _experience_penalty("4 to 6 years of experience", max_years=3)
+        assert penalty == -0.2
+
+    def test_range_low_end_5_or_more_heavy_penalty(self):
+        # "5 to 8 years" — low end 5 → -0.5
+        penalty, _ = _experience_penalty("5 to 8 years of experience", max_years=3)
         assert penalty == -0.5
 
 
@@ -390,10 +400,13 @@ class TestTitleScoring:
         score, _ = _title_score({"title": "Backend Engineer"}, _BACKEND_TARGETS)
         assert score > 0.1
 
-    def test_ios_title_no_boost_with_backend_targets(self):
-        # iOS Developer should NOT match "Backend Engineer" targets
+    def test_ios_title_gets_small_broad_boost_with_backend_targets(self):
+        # "iOS Developer" doesn't match backend targets but 'developer' is a broad tech term —
+        # it gets a small base score, much less than an exact target match.
         score, _ = _title_score({"title": "iOS Developer"}, _BACKEND_TARGETS)
-        assert score == 0.0
+        score_backend, _ = _title_score({"title": "Backend Engineer"}, _BACKEND_TARGETS)
+        assert score < score_backend
+        assert score < 0.3
 
     def test_ios_title_scores_for_ios_target(self):
         score, _ = _title_score({"title": "iOS Developer"}, ["iOS Developer"])
@@ -630,6 +643,8 @@ class TestCleanupGuard:
                     date_scraped    TEXT NOT NULL DEFAULT (datetime('now')),
                     score           REAL,
                     score_breakdown TEXT,
+                    needs_review    INTEGER DEFAULT 0,
+                    review_reasons  TEXT DEFAULT '[]',
                     UNIQUE(source, external_id)
                 );
                 CREATE TABLE IF NOT EXISTS applications (
@@ -824,3 +839,224 @@ class TestScoreJobIntegration:
             assert breakdown["location"] == 0.25, (
                 f"'fl' target should match '{city}', got location score={breakdown['location']}"
             )
+
+
+# ── Null description handling ─────────────────────────────────────────────────
+
+class TestNullDescriptionHandling:
+
+    def test_null_description_gives_neutral_skill_score(self):
+        job = make_job(description_raw=None)
+        prefs = make_prefs()
+        _, bd = score_job(job, prefs)
+        assert bd["skills"] == 0.10
+        assert "no_desc" in bd["notes"]
+
+    def test_null_description_flagged_as_needs_review(self):
+        job = make_job(description_raw=None)
+        prefs = make_prefs()
+        _, bd = score_job(job, prefs)
+        assert bd["needs_review"] is True
+
+    def test_present_description_not_flagged(self):
+        job = make_job(description_raw="python backend fastapi 2 years")
+        _, bd = score_job(job, make_prefs())
+        assert bd["needs_review"] is False
+
+    def test_null_description_skips_experience_penalty(self):
+        # Can't parse experience from a missing description — don't penalize
+        job = make_job(description_raw=None)
+        _, bd = score_job(job, make_prefs())
+        assert bd["experience_penalty"] == 0.0
+
+    def test_adjacent_title_with_null_desc_clears_score_floor(self):
+        # "Associate AI Software Developer" — broad tech match + hybrid Tampa + neutral skills
+        # must score above 0.3 so it isn't deleted by the cleanup floor
+        job = {
+            "title": "Associate AI Software Developer",
+            "company": "Advantiv",
+            "location": "Tampa, FL",
+            "remote_type": None,
+            "description_raw": None,
+            "url": "https://example.com/job/adv",
+        }
+        prefs = make_prefs(
+            target_titles=["Backend Engineer", "Software Engineer", "Software Developer"],
+            target_locations=["Tampa, FL", "Florida", "Remote"],
+        )
+        score, bd = score_job(job, prefs)
+        assert score >= 0.3, (
+            f"Adjacent tech title with null desc should survive floor, got score={score}, "
+            f"breakdown={bd['notes']}"
+        )
+
+
+# ── Broad tech term title base ────────────────────────────────────────────────
+
+class TestBroadTechTerms:
+
+    def test_non_standard_tech_title_gets_base_score(self):
+        # "AI Software Developer" isn't in targets but 'developer'/'software' are broad tech terms
+        score, _ = _title_score({"title": "AI Software Developer"}, ["Backend Engineer"])
+        assert score > 0.0
+
+    def test_non_tech_title_gets_no_broad_boost(self):
+        score, _ = _title_score({"title": "Account Manager"}, ["Backend Engineer"])
+        assert score == 0.0
+
+    def test_broad_term_in_desc_only_gives_smaller_boost_than_title(self):
+        job_title = {"title": "Software Engineer", "description_raw": "no tech words"}
+        job_desc  = {"title": "Sales Associate", "description_raw": "software engineer team"}
+        s_title, _ = _title_score(job_title, ["Backend Engineer"])
+        s_desc,  _ = _title_score(job_desc,  ["Backend Engineer"])
+        assert s_title > s_desc
+
+    def test_hybrid_in_description_detected_as_hybrid(self):
+        score, note = _location_score(
+            {"remote_type": None, "location": "Tampa, FL",
+             "description_raw": "This is a hybrid role based in Tampa."},
+            target_locations=["Tampa, FL"], remote_ok=True, hybrid_ok=True, onsite_ok=True,
+        )
+        assert score == 0.25
+        assert "hybrid" in note
+
+
+# ── Fuzzy title matching (R4) ─────────────────────────────────────────────────
+
+class TestFuzzyTitleMatching:
+    """Title matching must be word-token-based, not 1-to-1. 'Python Developer' as a
+    target should match any title containing 'python' or 'developer' as individual tokens."""
+
+    def _score_title(self, title, targets):
+        score, _ = _title_score({"title": title, "description_raw": ""}, targets)
+        return score
+
+    def test_exact_match_highest(self):
+        assert self._score_title("Python Developer", ["Python Developer"]) == 0.30
+
+    def test_python_data_scientist_matches_python_developer(self):
+        # "python" token is >3 chars and present in both target and title
+        assert self._score_title("Python Data Scientist", ["Python Developer"]) > 0.0
+
+    def test_software_developer_python_team_matches(self):
+        assert self._score_title("Software Developer – Python Team", ["Python Developer"]) > 0.0
+
+    def test_developer_python_django_matches(self):
+        assert self._score_title("Developer (Python/Django)", ["Python Developer"]) > 0.0
+
+    def test_frontend_designer_does_not_token_match_backend_engineer(self):
+        # "frontend" is a broad tech term (gives 0.10 base) but no token from
+        # "Backend Engineer" appears in "Frontend Designer" — so no title token bonus.
+        score = self._score_title("Frontend Designer", ["Backend Engineer"])
+        assert score <= 0.10, f"Expected at most broad-tech base score, got {score}"
+        # Verify it does NOT get the full 0.30 exact-match or 0.15 token-match bonus
+        assert score < 0.15
+
+    def test_devops_manager_does_not_match_backend_engineer(self):
+        # "devops" is in broad tech terms but not a title token match for "backend engineer"
+        score = self._score_title("DevOps Manager", ["Backend Engineer"])
+        # Broad tech "devops" gives 0.10 base, but no token match on "backend" or "engineer"
+        assert score <= 0.10
+
+    def test_case_insensitive_match(self):
+        assert self._score_title("BACKEND ENGINEER", ["backend engineer"]) == 0.30
+
+    def test_senior_backend_engineer_penalized(self):
+        s_senior = self._score_title("Senior Backend Engineer", ["Backend Engineer"])
+        s_normal = self._score_title("Backend Engineer", ["Backend Engineer"])
+        assert s_senior < s_normal
+
+    def test_multi_target_titles_any_match(self):
+        prefs = make_prefs(target_titles=["Backend Engineer", "Python Developer"])
+        score, _ = score_job(make_job(title="Python Developer"), prefs)
+        assert score > 0.0
+
+    def test_negative_keyword_case_insensitive_fuzzy(self):
+        score_lower, _ = score_job(make_job(description_raw="aerospace systems"), make_prefs(negative_keywords=["aerospace"]))
+        score_upper, _ = score_job(make_job(description_raw="Aerospace Systems"), make_prefs(negative_keywords=["aerospace"]))
+        assert score_lower < score_upper + 0.001  # both penalized equally
+
+
+# ── Review trigger tests (R5 + R7) ───────────────────────────────────────────
+
+class TestReviewTriggers:
+    """Verify all review-trigger conditions produce the correct reasons list."""
+
+    def test_null_description_triggers_review(self):
+        _, bd = score_job(make_job(description_raw=None), make_prefs())
+        assert bd["needs_review"] is True
+        assert "no_description" in bd["review_reasons"]
+
+    def test_empty_description_triggers_review(self):
+        _, bd = score_job(make_job(description_raw="   "), make_prefs())
+        assert bd["needs_review"] is True
+        assert "no_description" in bd["review_reasons"]
+
+    def test_present_description_no_review_flag(self):
+        _, bd = score_job(make_job(description_raw="python 2 years"), make_prefs())
+        assert bd["needs_review"] is False
+        assert bd["review_reasons"] == []
+
+    def test_null_salary_with_min_salary_pref_triggers_review(self):
+        job = make_job(salary_min=None, salary_max=None)
+        prefs = make_prefs(min_salary=60000)
+        _, bd = score_job(job, prefs)
+        assert "no_salary" in bd["review_reasons"]
+
+    def test_null_salary_without_min_pref_no_trigger(self):
+        job = make_job(salary_min=None, salary_max=None)
+        prefs = make_prefs(min_salary=None)
+        _, bd = score_job(job, prefs)
+        assert "no_salary" not in bd["review_reasons"]
+
+    def test_null_remote_type_no_remote_in_location_triggers_review(self):
+        job = make_job(remote_type=None, location="Tampa, FL", description_raw="python dev")
+        _, bd = score_job(job, make_prefs())
+        assert "no_remote_type" in bd["review_reasons"]
+
+    def test_null_remote_type_with_remote_in_location_no_trigger(self):
+        job = make_job(remote_type=None, location="Remote, US", description_raw="python dev")
+        _, bd = score_job(job, make_prefs())
+        assert "no_remote_type" not in bd["review_reasons"]
+
+    def test_no_title_signal_triggers_review(self):
+        # Completely non-tech title, no match, no broad tech terms
+        job = make_job(title="Account Manager", description_raw="sales crm leads")
+        _, bd = score_job(job, make_prefs())
+        assert "no_title_signal" in bd["review_reasons"]
+
+    def test_multiple_reasons_accumulated(self):
+        job = make_job(title="Account Manager", description_raw=None, remote_type=None, location="Tampa, FL")
+        prefs = make_prefs(min_salary=60000)
+        _, bd = score_job(job, prefs)
+        assert len(bd["review_reasons"]) >= 2
+
+    def test_review_flagged_job_scores_above_floor_when_otherwise_good(self):
+        # Job with null description but great title + good location should score > 0.3
+        # This ensures it won't be deleted by the floor cleanup
+        job = make_job(
+            title="Backend Engineer",
+            location="Remote",
+            remote_type="remote",
+            description_raw=None,
+        )
+        score, bd = score_job(job, make_prefs())
+        assert score >= 0.3, f"Review-flagged job should survive floor, got {score}: {bd['notes']}"
+        assert bd["needs_review"] is True
+
+    def test_score_job_row_persists_review_columns(self):
+        import json
+        job = make_job(description_raw=None)
+        result = score_job_row(job, make_prefs())
+        assert result["needs_review"] == 1
+        reasons = json.loads(result["review_reasons"])
+        assert isinstance(reasons, list)
+        assert "no_description" in reasons
+
+    def test_score_job_row_clean_job(self):
+        import json
+        job = make_job()
+        result = score_job_row(job, make_prefs())
+        assert result["needs_review"] == 0
+        reasons = json.loads(result["review_reasons"])
+        assert reasons == []

@@ -7,20 +7,18 @@ Docs: https://remoteok.com/api (first element is a notice, skip it)
 
 Rate limit: be polite — one request per run, no pagination needed (returns all jobs).
 """
-import re
-import time
+import logging
 import httpx
 
 from backend.scrapers.base import BaseScraper
+
+logger = logging.getLogger(__name__)
 
 _API_URL = "https://remoteok.com/api"
 _HEADERS = {
     "User-Agent": "job-search-expert/1.0 (open-source job search tool)",
     "Accept": "application/json",
 }
-
-# Tags we want to see — scraper returns all remote jobs, we take all and let scorer filter
-_RELEVANT_TAGS = {"python", "backend", "node", "javascript", "typescript", "api", "devops", "fullstack", "golang"}
 
 
 def _parse_salary(job: dict) -> tuple[int | None, int | None]:
@@ -35,7 +33,15 @@ def _parse_salary(job: dict) -> tuple[int | None, int | None]:
 class RemoteOKScraper(BaseScraper):
     source = "remoteok"
 
+    def __init__(self, remote_ok: bool = True) -> None:
+        super().__init__()
+        self.remote_ok = remote_ok
+
     def fetch_jobs(self) -> list[dict]:
+        if not self.remote_ok:
+            logger.info("remoteok: remote_ok=False in profile, skipping RemoteOK scraper")
+            return []
+
         try:
             with httpx.Client(headers=_HEADERS, timeout=20) as client:
                 resp = client.get(_API_URL)
@@ -51,7 +57,6 @@ class RemoteOKScraper(BaseScraper):
                 continue
 
             salary_min, salary_max = _parse_salary(item)
-            tags = item.get("tags") or []
 
             jobs.append({
                 "external_id": str(item["id"]),

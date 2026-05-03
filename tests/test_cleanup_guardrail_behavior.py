@@ -40,6 +40,8 @@ def _make_schema(conn: sqlite3.Connection):
             date_scraped    TEXT NOT NULL DEFAULT (datetime('now')),
             score           REAL,
             score_breakdown TEXT,
+            needs_review    INTEGER DEFAULT 0,
+            review_reasons  TEXT DEFAULT '[]',
             UNIQUE(source, external_id)
         );
         CREATE TABLE applications (

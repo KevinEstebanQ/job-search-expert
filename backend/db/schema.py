@@ -1,5 +1,8 @@
 import sqlite3
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "../../db/jobs.db"))
 
@@ -82,6 +85,24 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_applications_job_id ON applications(job_id);
             CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
         """)
+
+        # Idempotent column migrations for existing DBs
+        for migration in [
+            "ALTER TABLE jobs ADD COLUMN needs_review INTEGER DEFAULT 0",
+            "ALTER TABLE jobs ADD COLUMN review_reasons TEXT DEFAULT '[]'",
+        ]:
+            try:
+                conn.execute(migration)
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_needs_review ON jobs(needs_review)"
+            )
+        except sqlite3.OperationalError:
+            pass
+
     conn.close()
     print(f"Database initialized at {DB_PATH}")
 

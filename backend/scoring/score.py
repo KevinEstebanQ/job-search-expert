@@ -15,6 +15,13 @@ _SENIOR_TERMS = re.compile(
 _EXP_SINGLE = re.compile(r"(\d+)\+?\s*years?", re.IGNORECASE)
 _EXP_RANGE  = re.compile(r"(\d+)\s*(?:to|-)\s*(\d+)\s*years?", re.IGNORECASE)
 
+# Generic tech-role words that signal the job is in the right industry, even when
+# the exact title doesn't match any target_title in the profile.
+_BROAD_TECH_TERMS = re.compile(
+    r"\b(software|engineer|developer|programmer|backend|frontend|fullstack|full.stack|devops|platform|sre)\b",
+    re.IGNORECASE,
+)
+
 # US state abbreviation ↔ full name map (lowercase)
 _US_STATES: dict[str, str] = {
     "al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas",
@@ -80,29 +87,34 @@ def _text(job: dict) -> str:
 
 def _title_score(job: dict, target_titles: list[str]) -> tuple[float, str]:
     title = (job.get("title") or "").lower()
+    desc  = (job.get("description_raw") or "")[:500].lower()
     score = 0.0
 
     if not target_titles:
-        # No targeting set — neutral, no software-specific bias
+        # No targeting — fully neutral, no software-specific bias.
         if _SENIOR_TERMS.search(title):
             return 0.0, "title=neutral(no_targets,senior)"
         return 0.0, "title=neutral(no_targets)"
 
+    # Broad tech-role base signal: even if the exact title is non-standard (e.g.
+    # "Associate AI Software Developer"), a role word in the title or opening
+    # description gives a small base score so the job isn't buried below the floor.
+    if _BROAD_TECH_TERMS.search(title):
+        score = 0.10
+    elif _BROAD_TECH_TERMS.search(desc):
+        score = 0.05
+
+    # Target title matching (takes precedence over the broad base)
     for target in target_titles:
         target_lower = target.lower()
         if target_lower in title:
-            # Full phrase match
             score = max(score, 0.30)
         else:
-            # Token overlap: any word >3 chars from target found in title
             tokens = [w for w in target_lower.split() if len(w) > 3]
             if tokens and any(w in title for w in tokens):
                 score = max(score, 0.15)
 
     if _SENIOR_TERMS.search(title):
-        # Downrank senior/lead/staff titles — they're above the target seniority band.
-        # Use a softer -0.1 penalty (was -0.2) so FL senior jobs aren't buried by the
-        # score floor when description is unavailable (LinkedIn returns null descriptions).
         score = max(score - 0.1, 0.0)
 
     final = round(min(score, 0.35), 3)
@@ -135,15 +147,18 @@ def _location_score(
     hybrid_ok: bool,
     onsite_ok: bool = True,
 ) -> tuple[float, str]:
-    remote_type = (job.get("remote_type") or "").lower()
-    location    = (job.get("location") or "").lower()
+    remote_type  = (job.get("remote_type") or "").lower()
+    location     = (job.get("location") or "").lower()
+    desc_snippet = (job.get("description_raw") or "")[:500].lower()
 
     if remote_type == "remote" or "remote" in location:
         if remote_ok:
             return 0.3, "location=remote(1.0)"
         return 0.05, "location=remote(not_preferred)"
 
-    if remote_type == "hybrid" or "hybrid" in location:
+    # Hybrid: check remote_type field, location string, AND opening description
+    # because LinkedIn often leaves remote_type=null for hybrid roles.
+    if remote_type == "hybrid" or "hybrid" in location or "hybrid" in desc_snippet:
         if hybrid_ok:
             return 0.25, "location=hybrid(0.85)"
         return 0.05, "location=hybrid(not_preferred)"
@@ -159,14 +174,25 @@ def _location_score(
 
 
 def _experience_penalty(text: str, max_years: int) -> tuple[float, str]:
-    # Extract both ends of ranges ("2 to 5 years" → max is 5) and single values
-    range_matches  = _EXP_RANGE.findall(text)
-    single_matches = _EXP_SINGLE.findall(text)
+    range_matches = _EXP_RANGE.findall(text)  # [(lo, hi), ...]
 
-    all_values = [int(hi) for _, hi in range_matches] + [int(v) for v in single_matches]
-    if not all_values:
+    if range_matches:
+        # Use the LOW end of each range: a job posting "2-5 years" accepts someone
+        # with 2 years — penalizing by the high end was rejecting reasonable fits.
+        los = [int(lo) for lo, _ in range_matches]
+        max_lo = max(los)
+        if max_lo >= 5:
+            return -0.5, f"exp=penalty(range_lo={max_lo}yr >= 5)"
+        if max_lo > max_years:
+            return -0.2, f"exp=penalty(range_lo={max_lo}yr > {max_years})"
+        return 0.0, f"exp=ok(range_lo={min(los)}yr)"
+
+    # No range found — evaluate standalone values ("5+ years", "3 years")
+    single_matches = _EXP_SINGLE.findall(text)
+    if not single_matches:
         return 0.0, "exp=unspecified"
 
+    all_values = [int(v) for v in single_matches]
     max_found = max(all_values)
     if max_found >= 5:
         return -0.5, f"exp=penalty(found {max_found}yr >= 5)"
@@ -217,35 +243,78 @@ def _salary_penalty(job: dict, min_salary: int | None) -> tuple[float, str]:
     return 0.05, f"salary=ok({effective}>={min_salary})"
 
 
+def _compute_review_reasons(
+    job: dict,
+    preferences: dict,
+    title_score: float,
+) -> list[str]:
+    """
+    Return a list of human-readable reasons why this job needs manual review.
+    A non-empty list means needs_review=True.
+    """
+    reasons: list[str] = []
+
+    if not (job.get("description_raw") or "").strip():
+        reasons.append("no_description")
+
+    min_salary = preferences.get("min_salary")
+    if min_salary and job.get("salary_min") is None and job.get("salary_max") is None:
+        reasons.append("no_salary")
+
+    remote_type = (job.get("remote_type") or "").lower()
+    location    = (job.get("location") or "").lower()
+    if not remote_type and "remote" not in location and "hybrid" not in location:
+        reasons.append("no_remote_type")
+
+    # Can't confidently judge fit when title gives no signal at all
+    if title_score == 0.0 and not _BROAD_TECH_TERMS.search((job.get("title") or "").lower()):
+        reasons.append("no_title_signal")
+
+    return reasons
+
+
 def score_job(job: dict, preferences: dict) -> tuple[float, dict]:
     """
     Score a job against a profile preferences dict.
     Returns (score: float, breakdown: dict).
     """
     text = _text(job)
-    skill_sets         = preferences.get("skill_sets", {})
-    target_titles      = preferences.get("target_titles", [])
-    target_locations   = preferences.get("target_locations", [])
-    remote_ok          = preferences.get("remote_ok", True)
-    hybrid_ok          = preferences.get("hybrid_ok", True)
-    onsite_ok          = preferences.get("onsite_ok", True)
-    max_exp            = preferences.get("max_experience_years", 3)
-    negative_keywords  = preferences.get("negative_keywords", [])
-    required_keywords  = preferences.get("required_keywords", [])
-    blocked_companies  = preferences.get("blocked_companies", [])
-    min_salary         = preferences.get("min_salary")
+    description_missing = not (job.get("description_raw") or "").strip()
 
-    title_s,   title_note   = _title_score(job, target_titles)
-    skill_s,   skill_note   = _skill_score(text, skill_sets)
-    loc_s,     loc_note     = _location_score(job, target_locations, remote_ok, hybrid_ok, onsite_ok)
-    exp_pen,   exp_note     = _experience_penalty(text, max_exp)
-    neg_pen,   neg_note     = _negative_keyword_penalty(text, negative_keywords)
-    req_s,     req_note     = _required_keywords_score(text, required_keywords)
-    block_pen, block_note   = _blocked_company_penalty(job, blocked_companies)
-    sal_s,     sal_note     = _salary_penalty(job, min_salary)
+    skill_sets        = preferences.get("skill_sets", {})
+    target_titles     = preferences.get("target_titles", [])
+    target_locations  = preferences.get("target_locations", [])
+    remote_ok         = preferences.get("remote_ok", True)
+    hybrid_ok         = preferences.get("hybrid_ok", True)
+    onsite_ok         = preferences.get("onsite_ok", True)
+    max_exp           = preferences.get("max_experience_years", 3)
+    negative_keywords = preferences.get("negative_keywords", [])
+    required_keywords = preferences.get("required_keywords", [])
+    blocked_companies = preferences.get("blocked_companies", [])
+    min_salary        = preferences.get("min_salary")
+
+    title_s,   title_note  = _title_score(job, target_titles)
+    loc_s,     loc_note    = _location_score(job, target_locations, remote_ok, hybrid_ok, onsite_ok)
+    neg_pen,   neg_note    = _negative_keyword_penalty(text, negative_keywords)
+    block_pen, block_note  = _blocked_company_penalty(job, blocked_companies)
+    sal_s,     sal_note    = _salary_penalty(job, min_salary)
+
+    if description_missing:
+        # Can't evaluate skills or experience — give a neutral skill score and
+        # flag for manual review rather than dropping a potential gold mine.
+        skill_s, skill_note = 0.10, "skills=neutral(no_desc)"
+        exp_pen, exp_note   = 0.0,  "exp=skipped(no_desc)"
+        req_s,   req_note   = 0.0,  "req_kw=skipped(no_desc)"
+    else:
+        skill_s, skill_note = _skill_score(text, skill_sets)
+        exp_pen, exp_note   = _experience_penalty(text, max_exp)
+        req_s,   req_note   = _required_keywords_score(text, required_keywords)
 
     raw   = title_s + skill_s + loc_s + exp_pen + neg_pen + req_s + block_pen + sal_s
     final = round(max(0.0, min(raw, 1.0)), 3)
+
+    review_reasons = _compute_review_reasons(job, preferences, title_s)
+    needs_review   = bool(review_reasons)
 
     breakdown = {
         "title": title_s,
@@ -256,6 +325,8 @@ def score_job(job: dict, preferences: dict) -> tuple[float, dict]:
         "required_keywords": req_s,
         "blocked_company_penalty": block_pen,
         "salary": sal_s,
+        "needs_review": needs_review,
+        "review_reasons": review_reasons,
         "notes": (
             f"{title_note} | {skill_note} | {loc_note} | {exp_note} | {neg_note}"
             f" | {req_note} | {block_note} | {sal_note}"
@@ -265,9 +336,15 @@ def score_job(job: dict, preferences: dict) -> tuple[float, dict]:
 
 
 def score_job_row(job: dict, preferences: dict) -> dict:
-    """Returns job dict with score and score_breakdown fields populated."""
+    """Returns job dict with score, score_breakdown, needs_review, and review_reasons populated."""
     score, breakdown = score_job(job, preferences)
-    return {**job, "score": score, "score_breakdown": json.dumps(breakdown)}
+    return {
+        **job,
+        "score": score,
+        "score_breakdown": json.dumps(breakdown),
+        "needs_review": int(breakdown["needs_review"]),
+        "review_reasons": json.dumps(breakdown["review_reasons"]),
+    }
 
 
 if __name__ == "__main__":

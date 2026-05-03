@@ -122,3 +122,21 @@ def save_cover_letter(app_id: int, body: CoverLetterBody):
         )
     conn.close()
     return {"saved": True}
+
+
+@router.delete("/{app_id}")
+def delete_application(app_id: int):
+    """Delete an application and its underlying job row (both removed in a transaction)."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id, job_id FROM applications WHERE id = ?", (app_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Application not found")
+    job_id = row["job_id"]
+    with conn:
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    conn.close()
+    return {"deleted": True, "app_id": app_id, "job_id": job_id}

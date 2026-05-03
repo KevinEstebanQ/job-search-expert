@@ -4,32 +4,31 @@ No auth required. One request per company board slug.
 
 API: https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true
 """
+import json
+import logging
 import os
 import time
 import httpx
 
 from backend.scrapers.base import BaseScraper, _sha256_id
 
+logger = logging.getLogger(__name__)
 
-# Starter list of tech company Greenhouse board slugs.
-# Users can extend via preferences.json greenhouse_companies field.
-DEFAULT_COMPANIES = [
-    "stripe",
-    "linear",
-    "vercel",
-    "notion",
-    "figma",
-    "shopify",
-    "cloudflare",
-    "hashicorp",
-    "datadog",
-    "mongodb",
-    "cockroachlabs",
-    "planetscale",
-    "supabase",
-    "render",
-    "retool",
-]
+_CONFIG_PATH = os.path.join(
+    os.path.dirname(__file__), "../../config/greenhouse-companies.json"
+)
+
+
+def _load_default_companies() -> list[str]:
+    """Load company slugs from config/greenhouse-companies.json. Returns [] on failure."""
+    try:
+        with open(_CONFIG_PATH) as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [str(s).strip() for s in data if str(s).strip()]
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning("greenhouse: could not load default companies from config: %s", e)
+    return []
 
 _BASE_URL = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
 _HEADERS = {"User-Agent": "job-search-expert/1.0 (open-source job search tool)"}
@@ -89,7 +88,7 @@ class GreenhouseScraper(BaseScraper):
         elif env_companies:
             self.companies = [c.strip() for c in env_companies.split(",") if c.strip()]
         else:
-            self.companies = DEFAULT_COMPANIES
+            self.companies = _load_default_companies()
         # location_hints: non-empty list activates post-fetch geographic pre-filter
         self.location_hints: list[str] = [
             h for h in (location_hints or []) if h.strip().lower() not in ("remote", "")

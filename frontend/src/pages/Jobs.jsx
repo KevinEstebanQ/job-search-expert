@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getJobs } from '../api/client'
+import { getJobs, wipeJobs } from '../api/client'
 import JobCard from '../components/JobCard'
 
 const SOURCES = ['linkedin', 'indeed', 'glassdoor', 'zip_recruiter', 'dice', 'greenhouse', 'remoteok']
@@ -90,28 +90,100 @@ export default function Jobs() {
   function toggleSource(s) { setSource(prev => prev === s ? null : s) }
   function toggleRemote(r) { setRemoteType(prev => prev === r ? null : r) }
 
+  const [wipeInput, setWipeInput] = useState('')
+  const [wiping, setWiping] = useState(false)
+  const [wipeResult, setWipeResult] = useState(null)
+  const wipeReady = wipeInput.trim().toLowerCase() === 'wipe'
+
+  async function handleWipe() {
+    if (!wipeReady || wiping) return
+    setWiping(true)
+    try {
+      const result = await wipeJobs()
+      setWipeResult(result)
+      setWipeInput('')
+      setOffset(0)
+      setJobs([])
+      fetchJobs(0, true)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setWiping(false)
+    }
+  }
+
   return (
     <div style={{ maxWidth: '960px', margin: '0 auto', padding: '32px 24px' }}>
       {/* Header */}
-      <div style={{ marginBottom: '24px' }}>
-        <h1
-          style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: '32px',
-            fontWeight: 700,
-            letterSpacing: '0.02em',
-          }}
-        >
-          JOBS
-        </h1>
-        <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>
-          {total > 0 ? (
-            <span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>{total}</span>
-              {' '}matching jobs
+      <div style={{ marginBottom: '24px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+        <div>
+          <h1
+            style={{
+              fontFamily: 'var(--font-display)',
+              fontSize: '32px',
+              fontWeight: 700,
+              letterSpacing: '0.02em',
+            }}
+          >
+            JOBS
+          </h1>
+          <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            {total > 0 ? (
+              <span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>{total}</span>
+                {' '}matching jobs
+              </span>
+            ) : loading ? 'loading...' : 'No jobs found'}
+          </p>
+        </div>
+
+        {/* Wipe control */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+            <input
+              value={wipeInput}
+              onChange={e => { setWipeInput(e.target.value); setWipeResult(null) }}
+              placeholder='type "wipe" to confirm'
+              style={{
+                padding: '6px 10px',
+                background: 'var(--bg-surface)',
+                border: `1px solid ${wipeReady ? '#ef4444' : 'var(--border)'}`,
+                borderRadius: 'var(--radius)',
+                color: wipeReady ? '#ef4444' : 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '11px',
+                outline: 'none',
+                width: '160px',
+                transition: 'border-color 0.15s',
+              }}
+            />
+            <button
+              onClick={handleWipe}
+              disabled={!wipeReady || wiping}
+              style={{
+                padding: '6px 12px',
+                fontFamily: 'var(--font-display)',
+                fontSize: '11px',
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                borderRadius: 'var(--radius)',
+                border: '1px solid #ef4444',
+                background: wipeReady ? 'rgba(239,68,68,0.12)' : 'transparent',
+                color: wipeReady ? '#ef4444' : 'var(--text-dim)',
+                cursor: wipeReady && !wiping ? 'pointer' : 'not-allowed',
+                transition: 'all 0.15s',
+              }}
+            >
+              {wiping ? 'Wiping...' : 'Wipe DB'}
+            </button>
+          </div>
+          {wipeResult && (
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--text-dim)' }}>
+              deleted {wipeResult.deleted} · preserved {wipeResult.preserved}
             </span>
-          ) : loading ? 'loading...' : 'No jobs found'}
-        </p>
+          )}
+        </div>
       </div>
 
       {/* Filter bar */}

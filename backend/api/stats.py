@@ -29,6 +29,15 @@ def get_stats():
     unscored = conn.execute(
         "SELECT COUNT(*) FROM jobs WHERE score IS NULL"
     ).fetchone()[0]
+    needs_description_review = conn.execute(
+        """
+        SELECT COUNT(*) FROM jobs j
+        LEFT JOIN applications a ON a.job_id = j.id
+        WHERE j.description_raw IS NULL
+          AND j.score IS NOT NULL
+          AND a.id IS NULL
+        """
+    ).fetchone()[0]
     active_applications = conn.execute("""
         SELECT COUNT(*) FROM applications
         WHERE status IN ('applied', 'phone_screen', 'interview', 'offer')
@@ -36,6 +45,14 @@ def get_stats():
     new_today = conn.execute("""
         SELECT COUNT(*) FROM jobs WHERE date(date_scraped) = date('now')
     """).fetchone()[0]
+    # Jobs flagged for manual review due to missing/unparseable fields
+    review_queue_flagged = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE needs_review = 1"
+    ).fetchone()[0]
+    # Flagged jobs that still scored reasonably well — potential gold mines
+    review_queue_gold_mines = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE needs_review = 1 AND score >= 0.6"
+    ).fetchone()[0]
     conn.close()
     return {
         "total_jobs": total_jobs,
@@ -43,6 +60,9 @@ def get_stats():
         "unreviewed": unreviewed,
         "below_threshold": below_threshold,
         "unscored": unscored,
+        "needs_description_review": needs_description_review,
         "active_applications": active_applications,
         "new_today": new_today,
+        "review_queue_flagged": review_queue_flagged,
+        "review_queue_gold_mines": review_queue_gold_mines,
     }

@@ -69,6 +69,7 @@ def _cleanup(conn, prefs: dict | None = None) -> dict:
                 """
                 SELECT COUNT(*) FROM jobs
                 WHERE score IS NOT NULL AND score < :floor
+                  AND (needs_review IS NULL OR needs_review = 0)
                   AND id NOT IN (SELECT job_id FROM applications)
                 """,
                 {"floor": _SCORE_FLOOR},
@@ -83,6 +84,7 @@ def _cleanup(conn, prefs: dict | None = None) -> dict:
                     DELETE FROM jobs WHERE id IN (
                         SELECT id FROM jobs
                         WHERE score IS NOT NULL AND score < :floor
+                          AND (needs_review IS NULL OR needs_review = 0)
                           AND id NOT IN (SELECT job_id FROM applications)
                         ORDER BY score ASC
                         LIMIT :lim
@@ -96,6 +98,7 @@ def _cleanup(conn, prefs: dict | None = None) -> dict:
                     """
                     DELETE FROM jobs
                     WHERE score IS NOT NULL AND score < :floor
+                      AND (needs_review IS NULL OR needs_review = 0)
                       AND id NOT IN (SELECT job_id FROM applications)
                     """,
                     {"floor": _SCORE_FLOOR},
@@ -124,8 +127,16 @@ def _score_unscored(conn) -> int:
             job = dict(row)
             scored = score_job_row(job, prefs)
             conn.execute(
-                "UPDATE jobs SET score = ?, score_breakdown = ? WHERE id = ?",
-                (scored["score"], scored["score_breakdown"], job["id"]),
+                """UPDATE jobs
+                   SET score = ?, score_breakdown = ?, needs_review = ?, review_reasons = ?
+                   WHERE id = ?""",
+                (
+                    scored["score"],
+                    scored["score_breakdown"],
+                    scored.get("needs_review", 0),
+                    scored.get("review_reasons", "[]"),
+                    job["id"],
+                ),
             )
             count += 1
     return count
@@ -144,8 +155,16 @@ def rescore_all_jobs(conn) -> int:
             job = dict(row)
             scored = score_job_row(job, prefs)
             conn.execute(
-                "UPDATE jobs SET score = ?, score_breakdown = ? WHERE id = ?",
-                (scored["score"], scored["score_breakdown"], job["id"]),
+                """UPDATE jobs
+                   SET score = ?, score_breakdown = ?, needs_review = ?, review_reasons = ?
+                   WHERE id = ?""",
+                (
+                    scored["score"],
+                    scored["score_breakdown"],
+                    scored.get("needs_review", 0),
+                    scored.get("review_reasons", "[]"),
+                    job["id"],
+                ),
             )
             count += 1
     return count
@@ -189,7 +208,7 @@ def _run_scraper(source: str, prefs: dict | None = None) -> dict:
         ).run()
     if source == "remoteok":
         from backend.scrapers.remoteok import RemoteOKScraper
-        return RemoteOKScraper().run()
+        return RemoteOKScraper(remote_ok=prefs.get("remote_ok", True)).run()
     if source == "dice":
         from backend.scrapers.dice import DiceScraper
         return DiceScraper(queries=_build_dice_queries(prefs)).run()

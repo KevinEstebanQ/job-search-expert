@@ -1,4 +1,6 @@
 import { NavLink } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { getStats } from '../api/client'
 
 const navStyle = {
   position: 'sticky',
@@ -30,76 +32,62 @@ const dividerStyle = {
   background: 'var(--border)',
 }
 
+const navLinkStyle = ({ isActive }) => ({
+  fontFamily: 'var(--font-display)',
+  fontSize: '13px',
+  fontWeight: 600,
+  letterSpacing: '0.08em',
+  textTransform: 'uppercase',
+  color: isActive ? 'var(--text)' : 'var(--text-muted)',
+  borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+  paddingBottom: '2px',
+  transition: 'color 0.15s ease',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '5px',
+})
+
 export default function Nav() {
+  const [reviewCount, setReviewCount] = useState(0)
+
+  useEffect(() => {
+    getStats()
+      .then(d => setReviewCount(d.review_queue_flagged ?? 0))
+      .catch(() => {})
+    // Refresh every 60s
+    const id = setInterval(() => {
+      getStats()
+        .then(d => setReviewCount(d.review_queue_flagged ?? 0))
+        .catch(() => {})
+    }, 60000)
+    return () => clearInterval(id)
+  }, [])
+
   return (
     <nav style={navStyle}>
       <span style={logoStyle}>job-search-expert</span>
       <div style={dividerStyle} />
-      <NavLink
-        to="/"
-        end
-        style={({ isActive }) => ({
-          fontFamily: 'var(--font-display)',
-          fontSize: '13px',
-          fontWeight: 600,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          color: isActive ? 'var(--text)' : 'var(--text-muted)',
-          borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-          paddingBottom: '2px',
-          transition: 'color 0.15s ease',
-        })}
-      >
-        Dashboard
+      <NavLink to="/" end style={navLinkStyle}>Dashboard</NavLink>
+      <NavLink to="/jobs" style={navLinkStyle}>Jobs</NavLink>
+      <NavLink to="/pipeline" style={navLinkStyle}>Pipeline</NavLink>
+      <NavLink to="/review" style={navLinkStyle}>
+        Review
+        {reviewCount > 0 && (
+          <span style={{
+            background: '#f59e0b',
+            color: '#000',
+            borderRadius: '999px',
+            fontSize: '9px',
+            fontWeight: 700,
+            padding: '1px 5px',
+            lineHeight: 1.4,
+            letterSpacing: 0,
+          }}>
+            {reviewCount}
+          </span>
+        )}
       </NavLink>
-      <NavLink
-        to="/jobs"
-        style={({ isActive }) => ({
-          fontFamily: 'var(--font-display)',
-          fontSize: '13px',
-          fontWeight: 600,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          color: isActive ? 'var(--text)' : 'var(--text-muted)',
-          borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-          paddingBottom: '2px',
-          transition: 'color 0.15s ease',
-        })}
-      >
-        Jobs
-      </NavLink>
-      <NavLink
-        to="/pipeline"
-        style={({ isActive }) => ({
-          fontFamily: 'var(--font-display)',
-          fontSize: '13px',
-          fontWeight: 600,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          color: isActive ? 'var(--text)' : 'var(--text-muted)',
-          borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-          paddingBottom: '2px',
-          transition: 'color 0.15s ease',
-        })}
-      >
-        Pipeline
-      </NavLink>
-      <NavLink
-        to="/profile"
-        style={({ isActive }) => ({
-          fontFamily: 'var(--font-display)',
-          fontSize: '13px',
-          fontWeight: 600,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          color: isActive ? 'var(--text)' : 'var(--text-muted)',
-          borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-          paddingBottom: '2px',
-          transition: 'color 0.15s ease',
-        })}
-      >
-        Profile
-      </NavLink>
+      <NavLink to="/profile" style={navLinkStyle}>Profile</NavLink>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
         <span
           style={{

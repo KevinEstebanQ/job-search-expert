@@ -77,6 +77,26 @@ export function saveCoverLetter(id, text) {
   })
 }
 
+export function deleteApplication(id) {
+  return req(`/api/applications/${id}`, { method: 'DELETE' })
+}
+
+export function getReviewQueue(params = {}) {
+  const p = new URLSearchParams()
+  if (params.limit != null) p.set('limit', params.limit)
+  if (params.offset != null) p.set('offset', params.offset)
+  const qs = p.toString()
+  return req(`/api/jobs/review-queue${qs ? `?${qs}` : ''}`)
+}
+
+export function markJobReviewed(id) {
+  return req(`/api/jobs/${id}/mark-reviewed`, { method: 'PATCH' })
+}
+
+export function wipeJobs() {
+  return req('/api/jobs/wipe', { method: 'POST' })
+}
+
 export function getAiStatus() {
   return req('/api/ai/status')
 }

@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { getApplications, updateApplication } from '../api/client'
+import { getApplications, updateApplication, deleteApplication } from '../api/client'
 
 const COLUMN_ORDER = [
   'interested', 'applied', 'phone_screen', 'interview', 'offer', 'rejected', 'withdrawn',
@@ -129,7 +129,7 @@ function AppCard({ app, accent, onClick }) {
 
 // ── Detail Modal ──────────────────────────────────────────────────────────────
 
-function AppModal({ app, onClose, onUpdate }) {
+function AppModal({ app, onClose, onUpdate, onDelete }) {
   const [status, setStatus] = useState(app.status)
   const [notes, setNotes] = useState(app.notes || '')
   const [followUp, setFollowUp] = useState(app.follow_up_date || '')
@@ -137,6 +137,9 @@ function AppModal({ app, onClose, onUpdate }) {
   const [contactEmail, setContactEmail] = useState(app.contact_email || '')
   const [saving, setSaving] = useState(false)
   const [statusSaving, setStatusSaving] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const deleteTimerRef = useRef(null)
 
   async function handleStatusChange(newStatus) {
     if (newStatus === status) return
@@ -168,6 +171,20 @@ function AppModal({ app, onClose, onUpdate }) {
     } finally {
       setSaving(false)
     }
+  }
+
+  function handleDeleteClick() {
+    if (!deleteConfirm) {
+      setDeleteConfirm(true)
+      // Auto-reset confirm state after 3s if user doesn't click again
+      deleteTimerRef.current = setTimeout(() => setDeleteConfirm(false), 3000)
+      return
+    }
+    clearTimeout(deleteTimerRef.current)
+    setDeleting(true)
+    deleteApplication(app.id)
+      .then(() => onDelete())
+      .catch(e => { console.error(e); setDeleting(false); setDeleteConfirm(false) })
   }
 
   const accent = COLUMN_ACCENT[status] || 'var(--accent)'
@@ -294,7 +311,7 @@ function AppModal({ app, onClose, onUpdate }) {
         </div>
 
         {/* Actions */}
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)', flexWrap: 'wrap' }}>
           <Link
             to={`/cover-letter/${app.job_id}`}
             onClick={onClose}
@@ -321,6 +338,26 @@ function AppModal({ app, onClose, onUpdate }) {
             Draft Letter
           </Link>
           <div style={{ flex: 1 }} />
+          <button
+            onClick={handleDeleteClick}
+            disabled={deleting}
+            style={{
+              padding: '6px 12px',
+              fontFamily: 'var(--font-display)',
+              fontSize: '12px',
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              borderRadius: 'var(--radius)',
+              border: `1px solid ${deleteConfirm ? '#ef4444' : 'var(--border)'}`,
+              background: deleteConfirm ? 'rgba(239,68,68,0.12)' : 'var(--bg-elevated)',
+              color: deleteConfirm ? '#ef4444' : 'var(--text-dim)',
+              cursor: deleting ? 'wait' : 'pointer',
+              transition: 'all 0.15s',
+            }}
+          >
+            {deleting ? 'Deleting...' : deleteConfirm ? 'Confirm Delete' : 'Delete'}
+          </button>
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn btn-accent" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save'}
@@ -479,6 +516,10 @@ export default function Pipeline() {
           app={selectedApp}
           onClose={() => setSelectedApp(null)}
           onUpdate={() => {
+            fetchApps()
+            setSelectedApp(null)
+          }}
+          onDelete={() => {
             fetchApps()
             setSelectedApp(null)
           }}

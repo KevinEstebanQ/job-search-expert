@@ -5,10 +5,13 @@ No auth required.
 Endpoint: https://job-search-api.svc.dhigroupinc.com/v1/dice/jobs/search
 Returns JSON with job listings. Paginated via pageSize + pageNum params.
 """
+import logging
 import time
 import httpx
 
 from backend.scrapers.base import BaseScraper, _sha256_id
+
+logger = logging.getLogger(__name__)
 
 _SEARCH_URL = "https://job-search-api.svc.dhigroupinc.com/v1/dice/jobs/search"
 _HEADERS = {
@@ -19,11 +22,6 @@ _HEADERS = {
     "Referer": "https://www.dice.com/",
 }
 
-_SEARCH_QUERIES = [
-    "backend engineer python",
-    "software engineer python api",
-    "backend developer fastapi django",
-]
 _PAGE_SIZE = 20
 _MAX_PAGES = 3
 _RATE_LIMIT_DELAY = 1.0
@@ -70,9 +68,13 @@ class DiceScraper(BaseScraper):
 
     def __init__(self, queries: list[str] | None = None) -> None:
         super().__init__()
-        self.queries = queries or _SEARCH_QUERIES
+        self.queries = queries or []
 
     def fetch_jobs(self) -> list[dict]:
+        if not self.queries:
+            logger.warning("dice: no search queries provided (set target_titles in profile); skipping")
+            return []
+
         seen_ids: set[str] = set()
         jobs = []
 
